@@ -1,0 +1,76 @@
+{
+  "entities": {
+    "Room": {
+      "title": "Room",
+      "description": "A game room where players join to play Zoodle",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "status": { "type": "string", "enum": ["waiting", "playing", "finished"] },
+        "currentRound": { "type": "integer" },
+        "totalRounds": { "type": "integer" },
+        "currentDrawerId": { "type": "string" },
+        "currentWord": { "type": "string" },
+        "timeLeft": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "lastActive": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "status", "createdAt"]
+    },
+    "Player": {
+      "title": "Player",
+      "description": "A player in a game room",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "score": { "type": "integer" },
+        "coins": { "type": "integer" },
+        "isReady": { "type": "boolean" },
+        "isHost": { "type": "boolean" },
+        "lastActive": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "score", "coins"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "A chat or guess message in a room",
+      "type": "object",
+      "properties": {
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "text": { "type": "string" },
+        "type": { "type": "string", "enum": ["chat", "guess", "system"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["senderId", "senderName", "text", "type", "createdAt"]
+    },
+    "Drawing": {
+      "title": "Drawing",
+      "description": "The current drawing state of a room",
+      "type": "object",
+      "properties": {
+        "lines": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["lines", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/rooms/{roomId}": {
+      "schema": "Room",
+      "description": "Game room details"
+    },
+    "/rooms/{roomId}/players/{playerId}": {
+      "schema": "Player",
+      "description": "Players in the room"
+    },
+    "/rooms/{roomId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Chat and guess history"
+    },
+    "/rooms/{roomId}/drawing/current": {
+      "schema": "Drawing",
+      "description": "Current canvas state"
+    }
+  }
+}

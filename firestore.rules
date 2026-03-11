@@ -1,0 +1,143 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - displayName: string (required)
+    //   - totalCoins: number (required, >= 0)
+    //   - lastActive: timestamp (required)
+    //
+    // Collection: rooms
+    // Document ID: {roomId}
+    // Fields:
+    //   - name: string (required)
+    //   - status: string (required, enum: ['waiting', 'playing', 'finished'])
+    //   - mode: string (required, enum: ['classic', 'theme', 'speed'])
+    //   - currentRound: number (required)
+    //   - totalRounds: number (required)
+    //   - currentDrawerId: string (optional)
+    //   - currentWord: string (optional)
+    //   - timeLeft: number (required)
+    //   - createdAt: timestamp (required)
+    //   - lastActive: timestamp (required)
+    //
+    // Sub-collection: rooms/{roomId}/players
+    // Document ID: {playerId}
+    // Fields:
+    //   - name: string (required)
+    //   - score: number (required)
+    //   - coins: number (required)
+    //   - isReady: bool (required)
+    //   - isHost: bool (required)
+    //   - lastActive: string (required, ISO 8601)
+    //
+    // Sub-collection: rooms/{roomId}/messages
+    // Document ID: {messageId}
+    // Fields:
+    //   - senderId: string (required)
+    //   - senderName: string (required)
+    //   - text: string (required)
+    //   - type: string (required, enum: ['chat', 'system', 'guess'])
+    //   - createdAt: timestamp (required)
+    //
+    // Document: rooms/{roomId}/drawing/current
+    // Fields:
+    //   - lines: string (required, JSON stringified array)
+    //   - updatedAt: timestamp (required)
+    //
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "nawinrajpandiarajan@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isPlayerInRoom(roomId) {
+      return isAuthenticated() && exists(/databases/$(database)/documents/rooms/$(roomId)/players/$(request.auth.uid));
+    }
+
+    function isHost(roomId) {
+      return isAuthenticated() && get(/databases/$(database)/documents/rooms/$(roomId)).data.hostId == request.auth.uid;
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['displayName', 'totalCoins', 'lastActive', 'role']) &&
+             data.displayName is string && data.displayName.size() > 0 && data.displayName.size() < 50 &&
+             data.totalCoins is number && data.totalCoins >= 0 &&
+             (!('role' in data) || data.role == 'user');
+    }
+
+    function isValidRoom(data) {
+      return hasOnlyAllowedFields(['name', 'status', 'mode', 'currentRound', 'totalRounds', 'currentDrawerId', 'currentWord', 'timeLeft', 'createdAt', 'lastActive', 'isQuickPlay', 'hostId']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.status in ['waiting', 'playing', 'finished'] &&
+             data.mode in ['classic', 'theme', 'speed'] &&
+             data.currentRound is number &&
+             data.totalRounds is number &&
+             data.timeLeft is number &&
+             data.createdAt is timestamp &&
+             data.hostId is string &&
+             (!('isQuickPlay' in data) || data.isQuickPlay is bool);
+    }
+
+    function isValidPlayer(data) {
+      return hasOnlyAllowedFields(['name', 'score', 'coins', 'isReady', 'isHost', 'lastActive', 'isBot']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 50 &&
+             data.score is number &&
+             data.coins is number &&
+             data.isReady is bool &&
+             data.isHost is bool &&
+             (!('isBot' in data) || data.isBot is bool);
+    }
+
+    // User rules
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if (isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == resource.data.role) || isAdmin();
+    }
+
+    // Room rules
+    match /rooms/{roomId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidRoom(request.resource.data);
+      allow update: if isAuthenticated() && isValidRoom(request.resource.data);
+      
+      match /players/{playerId} {
+        allow read: if isAuthenticated();
+        // Allow user to create their own player doc, or host to manage bots
+        allow create: if isAuthenticated() && (request.auth.uid == playerId || (isHost(roomId) && request.resource.data.get('isBot', false) == true)) && isValidPlayer(request.resource.data);
+        allow update: if isAuthenticated() && (request.auth.uid == playerId || isHost(roomId) || isPlayerInRoom(roomId)) && isValidPlayer(request.resource.data);
+      }
+      
+      match /messages/{messageId} {
+        allow read: if isPlayerInRoom(roomId);
+        allow create: if isPlayerInRoom(roomId) && (request.resource.data.senderId == request.auth.uid || request.resource.data.senderId == 'system');
+      }
+      
+      match /drawing/current {
+        allow read: if isPlayerInRoom(roomId);
+        allow write: if isPlayerInRoom(roomId);
+      }
+    }
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Persistent user data",
+      "type": "object",
+      "properties": {
+        "displayName": { "type": "string" },
+        "totalCoins": { "type": "integer", "description": "Total coins earned across all games" },
+        "lastActive": { "type": "string", "format": "date-time" }
+      },
+      "required": ["displayName", "totalCoins"]
+    },
+    "Room": {
+      "title": "Room",
+      "description": "Game room data",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "status": { "type": "string", "enum": ["waiting", "playing", "finished"] },
+        "mode": { "type": "string", "enum": ["classic", "theme", "speed"] },
+        "currentRound": { "type": "integer" },
+        "totalRounds": { "type": "integer" },
+        "currentDrawerId": { "type": "string" },
+        "currentWord": { "type": "string" },
+        "timeLeft": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "status", "mode", "currentRound", "totalRounds", "timeLeft"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile and persistent stats"
+    },
+    "/rooms/{roomId}": {
+      "schema": "Room",
+      "description": "Active game rooms"
+    },
+    "/rooms/{roomId}/players/{playerId}": {
+      "schema": "Player",
+      "description": "Players in a specific room"
+    },
+    "/rooms/{roomId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Chat messages in a room"
+    }
+  }
+}
