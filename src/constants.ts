@@ -33,4 +33,4 @@ export const MODE_CONFIG = {
 export const ROUND_TIME = 60; // Default fallback
 export const TOTAL_ROUNDS = 3;
 export const POINTS_PER_GUESS = 100;
-export const COINS_PER_GUESS = 10;
+export const COINS_PER_GUESS = 100;

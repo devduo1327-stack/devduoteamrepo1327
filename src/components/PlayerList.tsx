@@ -1,6 +1,6 @@
 import React from 'react';
 import { Player } from '../types';
-import { Trophy, Coins, User } from 'lucide-react';
+import { Trophy, Coins, User, Crown } from 'lucide-react';
 
 interface PlayerListProps {
   players: Player[];
@@ -26,6 +26,11 @@ export const PlayerList: React.FC<PlayerListProps> = ({ players, currentDrawerId
               {currentDrawerId === player.id && (
                 <div className="absolute -top-1 -right-1 bg-amber-400 text-white p-1 rounded-full shadow-sm animate-bounce">
                   <span className="text-[10px] font-bold">✏️</span>
+                </div>
+              )}
+              {player.isHost && (
+                <div className="absolute -bottom-1 -right-1 bg-indigo-600 text-white p-0.5 rounded-full shadow-sm">
+                  <Crown size={10} />
                 </div>
               )}
             </div>

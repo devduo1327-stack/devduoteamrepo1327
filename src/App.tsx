@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   collection, 
   doc, 
@@ -19,8 +19,10 @@ import {
   getDoc,
   getDocs,
   deleteDoc,
-  runTransaction
+  runTransaction,
+  getDocFromServer
 } from 'firebase/firestore';
+
 import { 
   signInWithPopup, 
   GoogleAuthProvider, 
@@ -30,11 +32,12 @@ import {
 import { db, auth } from './firebase';
 import { Room, Player, Message, DrawingLine } from './types';
 import { WORD_LIST, THEME_WORDS, MODE_CONFIG, ROUND_TIME, TOTAL_ROUNDS, POINTS_PER_GUESS, COINS_PER_GUESS } from './constants';
+import { getWordPoints } from './botDrawing';
 import { Canvas } from './components/Canvas';
 import { Chat } from './components/Chat';
 import { PlayerList } from './components/PlayerList';
 import { motion, AnimatePresence } from 'motion/react';
-import { Plus, LogIn, Trophy, Coins, Palette, Eraser, Trash2, Play, Crown, Loader2, AlertCircle } from 'lucide-react';
+import { Plus, LogIn, Trophy, Coins, Palette, Eraser, Trash2, Play, Crown, Loader2, AlertCircle, ShoppingBag, Clock, Zap, X, User as UserIcon } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -138,18 +141,51 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 }
 
 const BOT_NAMES = ["ZoodleBot", "DoodleMaster", "Sketchy", "Artie", "PicasBot"];
+const ADJECTIVES = ["Neon", "Cyber", "Digital", "Quantum", "Hyper", "Virtual", "Binary", "Pixel"];
+const NOUNS = ["Nexus", "Void", "Grid", "Matrix", "Circuit", "Node", "Core", "Link"];
+
+const playSound = (url: string) => {
+  const audio = new Audio(url);
+  audio.volume = 0.4;
+  audio.play().catch(() => {});
+};
+
+const SOUNDS = {
+  TECH: "https://assets.mixkit.co/active_storage/sfx/2568/2568-preview.mp3",
+  WINNER: "https://assets.mixkit.co/active_storage/sfx/1435/1435-preview.mp3"
+};
 
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [playerName, setPlayerName] = useState('');
+
+  useEffect(() => {
+    async function testConnection() {
+      try {
+        await getDocFromServer(doc(db, 'test', 'connection'));
+      } catch (error) {
+        if(error instanceof Error && error.message.includes('the client is offline')) {
+          console.error("Please check your Firebase configuration. ");
+        }
+      }
+    }
+    testConnection();
+  }, []);
   const [currentRoom, setCurrentRoom] = useState<Room | null>(null);
   const [players, setPlayers] = useState<Player[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [drawingLines, setDrawingLines] = useState<DrawingLine[]>([]);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<'landing' | 'lobby' | 'game' | 'results'>('landing');
+  const [view, setView] = useState<'landing' | 'lobby' | 'game' | 'results' | 'shop'>('landing');
+  const [previousView, setPreviousView] = useState<'landing' | 'lobby' | 'game' | 'results'>('landing');
   const [userCoins, setUserCoins] = useState(0);
+  const [userInventory, setUserInventory] = useState({ freeze: 0, hint: 0, reveal: 0, skip: 0 });
+  const drawingLinesRef = useRef<DrawingLine[]>([]);
+
+  useEffect(() => {
+    drawingLinesRef.current = drawingLines;
+  }, [drawingLines]);
   
   // Drawing state
   const [brushColor, setBrushColor] = useState('#000000');
@@ -157,11 +193,62 @@ export default function App() {
   const [tool, setTool] = useState<'pen' | 'eraser'>('pen');
   const [toast, setToast] = useState<string | null>(null);
   const [selectedMode, setSelectedMode] = useState<'classic' | 'theme' | 'speed'>('classic');
+  const [resultsCountdown, setResultsCountdown] = useState(20);
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [loadingText, setLoadingText] = useState('Loading assets...');
+  const [isAppReady, setIsAppReady] = useState(false);
 
   const showToast = (msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 3000);
   };
+
+  // Loading simulation
+  useEffect(() => {
+    if (!loading) return;
+
+    const texts = [
+      'Loading assets...',
+      'Loading files...',
+      'Initializing database...',
+      'Connecting to server...',
+      'Preparing canvas...',
+      'Ready!'
+    ];
+
+    let currentProgress = 0;
+    const interval = setInterval(() => {
+      // High speed loading simulation
+      const increment = currentProgress < 50 ? Math.random() * 10 + 5 : Math.random() * 25 + 10;
+      currentProgress = Math.min(100, currentProgress + increment);
+      
+      setLoadingProgress(currentProgress);
+      
+      // Play tech sound on progress - more frequent
+      if (Math.random() < 0.5) playSound(SOUNDS.TECH);
+      
+      const textIndex = Math.min(texts.length - 1, Math.floor((currentProgress / 100) * (texts.length - 0.1)));
+      setLoadingText(texts[textIndex]);
+
+      if (currentProgress >= 100) {
+        clearInterval(interval);
+        setTimeout(() => {
+          setIsAppReady(true);
+        }, 100);
+      }
+    }, 40);
+
+    return () => clearInterval(interval);
+  }, [loading]);
+
+  // Winner sound effect when entering results view
+  useEffect(() => {
+    if (view === 'results') {
+      playSound(SOUNDS.WINNER);
+      // Play again after a short delay for "sounds" (plural)
+      setTimeout(() => playSound(SOUNDS.WINNER), 1500);
+    }
+  }, [view]);
 
   // Auth listener
   useEffect(() => {
@@ -177,14 +264,11 @@ export default function App() {
   useEffect(() => {
     if (!currentRoom || currentRoom.status !== 'waiting' || !currentRoom.isQuickPlay || !user) return;
     
-    const host = players.find(p => p.isHost);
-    if (host?.id !== user.uid) return;
+    if (currentRoom.hostId !== user.uid) return;
 
-    // If we have enough players (e.g., 3 including bots), start immediately
-    if (players.length >= 3) {
-      startGame();
-    }
-  }, [currentRoom, players, user]);
+    // Start immediately for Quick Play
+    startGame();
+  }, [currentRoom?.id, currentRoom?.status, currentRoom?.isQuickPlay, user]);
 
   // Persistent User Data Listener
   useEffect(() => {
@@ -196,12 +280,20 @@ export default function App() {
     const userRef = doc(db, 'users', user.uid);
     const unsubUser = onSnapshot(userRef, (doc) => {
       if (doc.exists()) {
-        setUserCoins(doc.data().totalCoins || 0);
+        const data = doc.data();
+        setUserCoins(data.totalCoins || 0);
+        setUserInventory(data.inventory || { freeze: 0, hint: 0, reveal: 0, skip: 0 });
+        if (data.displayName && !playerName) {
+          setPlayerName(data.displayName);
+        }
       } else {
         // Initialize user doc if it doesn't exist
+        const initialName = user.displayName || 'Anonymous';
+        setPlayerName(initialName);
         setDoc(userRef, {
-          displayName: user.displayName || 'Anonymous',
+          displayName: initialName,
           totalCoins: 0,
+          inventory: { freeze: 0, hint: 0, reveal: 0, skip: 0 },
           lastActive: serverTimestamp()
         }, { merge: true }).catch(e => handleFirestoreError(e, OperationType.WRITE, `users/${user.uid}`));
       }
@@ -269,33 +361,54 @@ export default function App() {
     };
   }, [currentRoom?.id]);
 
+  // Results countdown logic
+  useEffect(() => {
+    if (view !== 'results') {
+      setResultsCountdown(20);
+      return;
+    }
+
+    const timer = setInterval(() => {
+      setResultsCountdown(prev => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          setView('landing');
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [view]);
+
   // Timer logic (only for host)
   useEffect(() => {
     if (!currentRoom || currentRoom.status !== 'playing' || !user) return;
     
-    const host = players.find(p => p.isHost);
-    if (host?.id !== user.uid) return;
+    if (currentRoom.hostId !== user.uid) return;
 
     const interval = setInterval(async () => {
       if (currentRoom.timeLeft > 0) {
+        // Update every 2 seconds to save quota
         await updateDoc(doc(db, 'rooms', currentRoom.id), {
-          timeLeft: currentRoom.timeLeft - 1
+          timeLeft: Math.max(0, currentRoom.timeLeft - 2)
         });
       } else {
         // Round ended
         handleRoundEnd();
       }
-    }, 1000);
+    }, 2000);
 
     return () => clearInterval(interval);
   }, [currentRoom, players, user]);
 
   // Bot logic (only for host)
+  const botDrawingStepRef = useRef<number>(0);
   useEffect(() => {
     if (!currentRoom || currentRoom.status !== 'playing' || !user) return;
     
-    const host = players.find(p => p.isHost);
-    if (host?.id !== user.uid) return;
+    if (currentRoom.hostId !== user.uid) return;
 
     const bots = players.filter(p => p.isBot);
     if (bots.length === 0) return;
@@ -304,41 +417,56 @@ export default function App() {
       const activeBot = bots[Math.floor(Math.random() * bots.length)];
       
       // Bot Guessing
-      if (activeBot.id !== currentRoom.currentDrawerId) {
-        // 10% chance to guess correctly every 5 seconds
-        const shouldGuessCorrect = Math.random() < 0.1;
+      if (activeBot.id !== currentRoom.currentDrawerId && !activeBot.hasGuessedCorrectly) {
+        // 25% chance to guess correctly every 4 seconds
+        const shouldGuessCorrect = Math.random() < 0.25;
         if (shouldGuessCorrect) {
           await handleBotGuess(activeBot, currentRoom.currentWord);
-        } else if (Math.random() < 0.2) {
-          // 20% chance to guess something random
-          const randomGuesses = ["Is it a cat?", "Looks like a tree", "Maybe a house?", "I don't know!", "Cool drawing!"];
+        } else if (Math.random() < 0.3) {
+          // 30% chance to guess something random
+          const randomGuesses = [
+            "Is it a cat?", "Looks like a tree", "Maybe a house?", "I don't know!", 
+            "Cool drawing!", "What is that?", "Interesting...", "Hmm...", 
+            "Wait, I know!", "Is it a dog?", "A bird?", "A car?", "A plane?",
+            "Super cool!", "I'm close!", "Almost got it!", "Is it food?"
+          ];
           await handleBotGuess(activeBot, randomGuesses[Math.floor(Math.random() * randomGuesses.length)]);
         }
       }
 
       // Bot Drawing (if bot is drawer)
       if (activeBot.id === currentRoom.currentDrawerId) {
-        // Bots "draw" by adding a random line occasionally
-        const newLine: DrawingLine = {
-          tool: 'pen',
-          points: [Math.random() * 500, Math.random() * 400, Math.random() * 500, Math.random() * 400],
-          color: '#'+Math.floor(Math.random()*16777215).toString(16),
-          strokeWidth: 5
-        };
-        const updatedLines = [...drawingLines, newLine];
-        await handleDraw(updatedLines);
+        const word = currentRoom.currentWord;
+        const allLines = getWordPoints(word, 50, 150, 30);
+        
+        if (botDrawingStepRef.current < allLines.length) {
+          const linePoints = allLines[botDrawingStepRef.current];
+          const newLine: DrawingLine = {
+            tool: 'pen',
+            points: linePoints,
+            color: '#000000',
+            strokeWidth: 4
+          };
+          const updatedLines = [...drawingLinesRef.current, newLine];
+          await handleDraw(updatedLines);
+          botDrawingStepRef.current++;
+        }
+      } else {
+        botDrawingStepRef.current = 0;
       }
-    }, 5000);
+    }, 3000);
 
     return () => clearInterval(botInterval);
-  }, [currentRoom, players, user, drawingLines]);
+  }, [currentRoom?.id, currentRoom?.status, currentRoom?.currentDrawerId, currentRoom?.hostId, currentRoom?.currentWord, players, user]);
 
   const handleBotGuess = async (bot: Player, text: string) => {
     if (!currentRoom) return;
     
-    const isCorrect = text.toLowerCase() === currentRoom.currentWord.toLowerCase();
+    const normalizedGuess = text.trim().toLowerCase();
+    const normalizedWord = currentRoom.currentWord.trim().toLowerCase();
+    const isCorrect = normalizedGuess === normalizedWord;
     
-    if (isCorrect) {
+    if (isCorrect && !bot.hasGuessedCorrectly) {
       await addDoc(collection(db, 'rooms', currentRoom.id, 'messages'), {
         senderId: 'system',
         senderName: 'System',
@@ -347,13 +475,17 @@ export default function App() {
         createdAt: serverTimestamp()
       });
 
+      // Stop timer to end round immediately
+      await updateDoc(doc(db, 'rooms', currentRoom.id), { timeLeft: 0 });
+
       const botRef = doc(db, 'rooms', currentRoom.id, 'players', bot.id);
       const config = MODE_CONFIG[currentRoom.mode];
       await updateDoc(botRef, {
         score: bot.score + Math.round(POINTS_PER_GUESS * config.pointsMultiplier),
-        coins: bot.coins + Math.round(COINS_PER_GUESS * config.pointsMultiplier)
+        coins: bot.coins + Math.round(COINS_PER_GUESS * config.pointsMultiplier),
+        hasGuessedCorrectly: true
       });
-    } else {
+    } else if (!isCorrect) {
       await addDoc(collection(db, 'rooms', currentRoom.id, 'messages'), {
         senderId: bot.id,
         senderName: bot.name,
@@ -372,6 +504,7 @@ export default function App() {
     if (nextRound > config.totalRounds) {
       await updateDoc(doc(db, 'rooms', currentRoom.id), { status: 'finished' });
       confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
+      playSound(SOUNDS.WINNER);
     } else {
       // Pick next drawer
       const currentIndex = players.findIndex(p => p.id === currentRoom.currentDrawerId);
@@ -387,6 +520,16 @@ export default function App() {
       } else {
         nextWord = WORD_LIST[Math.floor(Math.random() * WORD_LIST.length)];
       }
+
+      // Reset hasGuessedCorrectly for all players
+      const playersRef = collection(db, 'rooms', currentRoom.id, 'players');
+      const playersSnap = await getDocs(playersRef);
+      const batch = playersSnap.docs.map(playerDoc => 
+        updateDoc(doc(db, 'rooms', currentRoom.id, 'players', playerDoc.id), {
+          hasGuessedCorrectly: false
+        })
+      );
+      await Promise.all(batch);
 
       await updateDoc(doc(db, 'rooms', currentRoom.id), {
         currentRound: nextRound,
@@ -423,17 +566,20 @@ export default function App() {
         return;
       }
 
+      const roomData = roomSnap.data() as Room;
+      const isHost = roomData.hostId === user.uid;
+
       const playerRef = doc(db, 'rooms', roomId, 'players', user.uid);
       await setDoc(playerRef, {
         name: playerName,
         score: 0,
         coins: 0,
-        isReady: false,
-        isHost: false,
+        isReady: isHost,
+        isHost: isHost,
         lastActive: new Date().toISOString()
       });
 
-      setCurrentRoom({ ...roomSnap.data(), id: roomId } as Room);
+      setCurrentRoom({ ...roomData, id: roomId });
       setView('lobby');
     } catch (e) {
       console.error(e);
@@ -447,7 +593,9 @@ export default function App() {
     setLoading(true);
     try {
       const config = MODE_CONFIG[selectedMode];
-      const roomName = `${playerName}'s Room`;
+      const roomName = withBots 
+        ? `${ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)]} ${NOUNS[Math.floor(Math.random() * NOUNS.length)]} ${Math.floor(Math.random() * 999)}`
+        : `${playerName}'s Room`;
       const roomData = {
         name: roomName,
         status: 'waiting',
@@ -481,7 +629,6 @@ export default function App() {
         for (let i = 0; i < 2; i++) {
           const botId = `bot_${Math.random().toString(36).substr(2, 9)}`;
           const botData = {
-            id: botId,
             name: BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)],
             score: 0,
             coins: 0,
@@ -491,7 +638,7 @@ export default function App() {
             lastActive: new Date().toISOString()
           };
           await setDoc(doc(db, 'rooms', roomRef.id, 'players', botId), botData);
-          botPlayers.push(botData);
+          botPlayers.push({ ...botData, id: botId });
         }
       }
 
@@ -502,6 +649,7 @@ export default function App() {
         // We need the players list to start the game
         const allPlayers = [{ id: user.uid, name: playerName, score: 0, coins: 0, isReady: true, isHost: true, lastActive: new Date().toISOString() }, ...botPlayers];
         await startGameInternal(finalRoom, allPlayers);
+        setView('game'); // Immediate transition for Quick Play
       } else {
         setView('lobby');
       }
@@ -548,21 +696,52 @@ export default function App() {
     });
   };
 
+  const lastDrawTimeRef = useRef<number>(0);
   const handleDraw = async (lines: DrawingLine[]) => {
-    if (!currentRoom) return;
+    if (!currentRoom || !user) return;
+    
+    // Only the current drawer should be able to draw
+    const isDrawer = user.uid === currentRoom.currentDrawerId;
+    const isHostForBot = currentRoom.hostId === user.uid && players.find(p => p.id === currentRoom.currentDrawerId)?.isBot;
+
+    if (!isDrawer && !isHostForBot) return;
+
+    // Throttle writes to every 300ms to save quota
+    const now = Date.now();
+    if (now - lastDrawTimeRef.current < 300 && lines.length > 0) return;
+    lastDrawTimeRef.current = now;
+
     await setDoc(doc(db, 'rooms', currentRoom.id, 'drawing', 'current'), {
       lines: JSON.stringify(lines),
       updatedAt: serverTimestamp()
     });
   };
 
+  const updatePlayerName = async (newName: string) => {
+    if (!user || !newName.trim()) return;
+    setPlayerName(newName);
+    
+    // Update in users collection
+    const userRef = doc(db, 'users', user.uid);
+    await updateDoc(userRef, { displayName: newName }).catch(() => {});
+
+    // Update in current room if in one
+    if (currentRoom) {
+      const playerRef = doc(db, 'rooms', currentRoom.id, 'players', user.uid);
+      await updateDoc(playerRef, { name: newName }).catch(() => {});
+    }
+  };
+
   const handleSendMessage = async (text: string) => {
     if (!currentRoom || !user) return;
 
-    const isCorrect = text.toLowerCase() === currentRoom.currentWord.toLowerCase();
+    const normalizedGuess = text.trim().toLowerCase();
+    const normalizedWord = currentRoom.currentWord.trim().toLowerCase();
+    const isCorrect = normalizedGuess === normalizedWord;
     const isDrawer = user.uid === currentRoom.currentDrawerId;
+    const currentPlayer = players.find(p => p.id === user.uid);
 
-    if (isCorrect && !isDrawer && currentRoom.status === 'playing') {
+    if (isCorrect && !isDrawer && currentRoom.status === 'playing' && !currentPlayer?.hasGuessedCorrectly) {
       // Correct guess!
       await addDoc(collection(db, 'rooms', currentRoom.id, 'messages'), {
         senderId: 'system',
@@ -571,6 +750,9 @@ export default function App() {
         type: 'guess',
         createdAt: serverTimestamp()
       });
+
+      // Stop timer to end round immediately
+      await updateDoc(doc(db, 'rooms', currentRoom.id), { timeLeft: 0 });
 
       // Update score in room and persistent coins
       const playerRef = doc(db, 'rooms', currentRoom.id, 'players', user.uid);
@@ -586,19 +768,22 @@ export default function App() {
         if (pSnap.exists()) {
           const data = pSnap.data();
           transaction.update(playerRef, {
-            score: data.score + earnedPoints,
-            coins: data.coins + earnedCoins
+            score: (data.score || 0) + earnedPoints,
+            coins: (data.coins || 0) + earnedCoins,
+            hasGuessedCorrectly: true
           });
         }
 
-        if (uSnap.exists()) {
-          const uData = uSnap.data();
-          transaction.update(userRef, {
-            totalCoins: (uData.totalCoins || 0) + earnedCoins,
-            lastActive: serverTimestamp()
-          });
-        }
+        const currentTotalCoins = uSnap.exists() ? (uSnap.data().totalCoins || 0) : 0;
+        transaction.set(userRef, {
+          totalCoins: currentTotalCoins + earnedCoins,
+          lastActive: serverTimestamp(),
+          displayName: playerName || user.displayName || 'Anonymous'
+        }, { merge: true });
       });
+    } else if (currentPlayer?.hasGuessedCorrectly && isCorrect) {
+      // Already guessed, don't send message or just send as chat
+      return;
     } else {
       await addDoc(collection(db, 'rooms', currentRoom.id, 'messages'), {
         senderId: user.uid,
@@ -617,36 +802,238 @@ export default function App() {
     }
     setLoading(true);
     try {
-      // Find a waiting room with players that is a Quick Play room
-      const roomsRef = collection(db, 'rooms');
-      const q = query(roomsRef, 
-        where('status', '==', 'waiting'), 
-        where('isQuickPlay', '==', true),
-        limit(20)
-      );
-      const querySnapshot = await getDocs(q);
-      
-      if (!querySnapshot.empty) {
-        const rooms = querySnapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-        const randomRoom = rooms[Math.floor(Math.random() * rooms.length)];
-        await joinRoom(randomRoom.id);
-      } else {
-        // Create a new room with bots and start immediately
-        await createRoom(true, true);
-      }
+      // Always create a fresh Quick Play room for immediate start and random name
+      await createRoom(true, true);
     } catch (e) {
       console.error(e);
-      showToast("Failed to find a room");
+      showToast("Failed to start Quick Play");
     } finally {
       setLoading(false);
     }
   };
 
-  if (loading) {
+  const buyPowerup = async (type: 'freeze' | 'hint' | 'reveal' | 'skip') => {
+    if (!user) return;
+    
+    const costs = { freeze: 500, hint: 200, reveal: 300, skip: 250 };
+    const cost = costs[type];
+
+    if (userCoins < cost) {
+      showToast("Not enough coins!");
+      return;
+    }
+
+    const isPlaying = currentRoom && currentRoom.status === 'playing';
+
+    try {
+      await runTransaction(db, async (transaction) => {
+        const userRef = doc(db, 'users', user.uid);
+        const uSnap = await transaction.get(userRef);
+        if (!uSnap.exists()) throw new Error("User profile not found");
+        
+        const uData = uSnap.data();
+        if ((uData.totalCoins || 0) < cost) throw new Error("Not enough coins");
+
+        const newInventory = { ...(uData.inventory || { freeze: 0, hint: 0, reveal: 0, skip: 0 }) };
+
+        if (isPlaying) {
+          const roomRef = doc(db, 'rooms', currentRoom.id);
+          const rSnap = await transaction.get(roomRef);
+          if (!rSnap.exists()) throw new Error("Room not found");
+          const rData = rSnap.data();
+
+          if (type === 'freeze') {
+            transaction.update(roomRef, {
+              timeLeft: (rData.timeLeft || 0) + 15
+            });
+          } else if (type === 'skip') {
+            if (user.uid !== rData.currentDrawerId) {
+              throw new Error("Only the drawer can skip the word");
+            }
+            
+            let nextWord = WORD_LIST[Math.floor(Math.random() * WORD_LIST.length)];
+            transaction.update(roomRef, {
+              currentWord: nextWord
+            });
+          }
+        } else {
+          // Add to inventory if not in game
+          newInventory[type] = (newInventory[type] || 0) + 1;
+        }
+
+        transaction.update(userRef, {
+          totalCoins: uData.totalCoins - cost,
+          inventory: newInventory
+        });
+      });
+
+      // Handle side effects outside transaction
+      if (isPlaying) {
+        if (type === 'freeze') {
+          await addDoc(collection(db, 'rooms', currentRoom.id, 'messages'), {
+            senderId: 'system',
+            senderName: 'System',
+            text: `${playerName} used Time Freeze! +15s`,
+            type: 'system',
+            createdAt: serverTimestamp()
+          });
+        } else if (type === 'hint') {
+          const word = currentRoom.currentWord;
+          const hintIndex = Math.floor(Math.random() * word.length);
+          const hintChar = word[hintIndex];
+          showToast(`Hint: The word has '${hintChar}' at position ${hintIndex + 1}`);
+        } else if (type === 'reveal') {
+          const word = currentRoom.currentWord;
+          let category = "General";
+          for (const [cat, words] of Object.entries(THEME_WORDS)) {
+            if (words.includes(word)) {
+              category = cat;
+              break;
+            }
+          }
+          showToast(`Category: This word is related to ${category}`);
+        } else if (type === 'skip') {
+          await addDoc(collection(db, 'rooms', currentRoom.id, 'messages'), {
+            senderId: 'system',
+            senderName: 'System',
+            text: `${playerName} skipped the word and got a new one!`,
+            type: 'system',
+            createdAt: serverTimestamp()
+          });
+        }
+        showToast("Power-up activated!");
+      } else {
+        showToast("Power-up added to inventory!");
+      }
+    } catch (e) {
+      console.error(e);
+      showToast(e instanceof Error ? e.message : "Failed to buy power-up");
+    }
+  };
+
+  const usePowerup = async (type: 'freeze' | 'hint' | 'reveal' | 'skip') => {
+    if (!user || !currentRoom || currentRoom.status !== 'playing') return;
+    
+    if ((userInventory[type] || 0) <= 0) {
+      showToast(`No ${type} power-ups in inventory!`);
+      return;
+    }
+
+    try {
+      await runTransaction(db, async (transaction) => {
+        const userRef = doc(db, 'users', user.uid);
+        const uSnap = await transaction.get(userRef);
+        if (!uSnap.exists()) throw new Error("User profile not found");
+        
+        const uData = uSnap.data();
+        const inv = uData.inventory || { freeze: 0, hint: 0, reveal: 0, skip: 0 };
+        if ((inv[type] || 0) <= 0) throw new Error("No charges left");
+
+        const roomRef = doc(db, 'rooms', currentRoom.id);
+        const rSnap = await transaction.get(roomRef);
+        if (!rSnap.exists()) throw new Error("Room not found");
+        const rData = rSnap.data();
+
+        const newInventory = { ...inv };
+        newInventory[type] = inv[type] - 1;
+
+        transaction.update(userRef, { inventory: newInventory });
+
+        if (type === 'freeze') {
+          transaction.update(roomRef, {
+            timeLeft: (rData.timeLeft || 0) + 15
+          });
+        } else if (type === 'skip') {
+          if (user.uid !== rData.currentDrawerId) {
+            throw new Error("Only the drawer can skip the word");
+          }
+          
+          let nextWord = WORD_LIST[Math.floor(Math.random() * WORD_LIST.length)];
+          transaction.update(roomRef, {
+            currentWord: nextWord
+          });
+        }
+      });
+
+      // Handle side effects
+      if (type === 'freeze') {
+        await addDoc(collection(db, 'rooms', currentRoom.id, 'messages'), {
+          senderId: 'system',
+          senderName: 'System',
+          text: `${playerName} used Time Freeze! +15s`,
+          type: 'system',
+          createdAt: serverTimestamp()
+        });
+      } else if (type === 'hint') {
+        const word = currentRoom.currentWord;
+        const hintIndex = Math.floor(Math.random() * word.length);
+        const hintChar = word[hintIndex];
+        showToast(`Hint: The word has '${hintChar}' at position ${hintIndex + 1}`);
+      } else if (type === 'reveal') {
+        const word = currentRoom.currentWord;
+        let category = "General";
+        for (const [cat, words] of Object.entries(THEME_WORDS)) {
+          if (words.includes(word)) {
+            category = cat;
+            break;
+          }
+        }
+        showToast(`Category: This word is related to ${category}`);
+      } else if (type === 'skip') {
+        await addDoc(collection(db, 'rooms', currentRoom.id, 'messages'), {
+          senderId: 'system',
+          senderName: 'System',
+          text: `${playerName} used Skip Word!`,
+          type: 'system',
+          createdAt: serverTimestamp()
+        });
+      }
+
+      showToast("Power-up used!");
+    } catch (e) {
+      console.error(e);
+      showToast(e instanceof Error ? e.message : "Failed to use power-up");
+    }
+  };
+
+  if (loading || !isAppReady) {
     return (
-      <div className="min-h-screen bg-indigo-600 flex flex-col items-center justify-center text-white">
-        <Loader2 className="w-12 h-12 animate-spin mb-4" />
-        <h1 className="text-2xl font-bold animate-pulse">Loading Zoodle...</h1>
+      <div className="min-h-screen bg-indigo-600 flex flex-col items-center justify-center text-white p-8">
+        <div className="w-full max-w-md flex flex-col items-center">
+          <motion.div
+            initial={{ scale: 0.8, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="mb-8 relative"
+          >
+            <div className="absolute inset-0 bg-white/20 blur-2xl rounded-full" />
+            <img 
+              src="https://picsum.photos/seed/devduo/200/200" 
+              alt="Dev Duo Logo" 
+              className="w-32 h-32 rounded-3xl shadow-2xl relative z-10 border-4 border-white/20"
+              referrerPolicy="no-referrer"
+            />
+          </motion.div>
+
+          <h1 className="text-4xl font-black mb-8 text-center italic tracking-tighter">ZOODLE</h1>
+          
+          <div className="w-full mb-2 flex justify-between items-end">
+            <span className="text-sm font-bold uppercase tracking-widest opacity-80">Loading...</span>
+            <span className="text-2xl font-black">{Math.floor(loadingProgress)}%</span>
+          </div>
+          
+          <div className="w-full h-3 bg-indigo-800 rounded-full overflow-hidden mb-4 shadow-inner">
+            <motion.div 
+              className="h-full bg-white shadow-[0_0_20px_rgba(255,255,255,0.5)]"
+              initial={{ width: 0 }}
+              animate={{ width: `${loadingProgress}%` }}
+              transition={{ type: 'spring', bounce: 0, duration: 0.2 }}
+            />
+          </div>
+          
+          <p className="text-center text-indigo-200 font-medium animate-pulse">
+            {loadingText}
+          </p>
+        </div>
       </div>
     );
   }
@@ -659,7 +1046,7 @@ export default function App() {
           animate={{ opacity: 1, y: 0 }}
           className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full text-center"
         >
-          <h1 className="text-4xl font-black text-indigo-600 mb-2 italic">ZOODLE</h1>
+          <h1 className="text-4xl font-black text-slate-900 mb-2 italic">ZOODLE</h1>
           <p className="text-slate-500 mb-8">The ultimate drawing & guessing game</p>
           <button 
             onClick={() => {
@@ -684,6 +1071,121 @@ export default function App() {
       <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
         <AnimatePresence mode="wait">
           {/* ... existing views ... */}
+        {view === 'shop' && (
+          <motion.div 
+            key="shop"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="max-w-2xl mx-auto pt-20 px-4"
+          >
+            <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100">
+              <div className="flex items-center justify-between mb-8">
+                <h2 className="text-3xl font-black text-slate-900 italic">POWER-UP SHOP</h2>
+                <button 
+                  onClick={() => setView(previousView)}
+                  className="p-2 hover:bg-slate-100 rounded-full transition-colors"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="p-6 rounded-2xl border-2 border-indigo-50 bg-indigo-50/30 flex flex-col justify-between">
+                  <div>
+                    <div className="flex justify-between items-start mb-4">
+                      <div className="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center text-indigo-600">
+                        <Clock size={24} />
+                      </div>
+                      <div className="bg-indigo-600 text-white text-[10px] font-black px-2 py-1 rounded-full uppercase">
+                        Owned: {userInventory.freeze}
+                      </div>
+                    </div>
+                    <h3 className="text-xl font-bold text-slate-900 mb-2">Time Freeze</h3>
+                    <p className="text-sm text-slate-500 mb-4">Add 15 seconds to the current round timer.</p>
+                  </div>
+                  <button 
+                    onClick={() => buyPowerup('freeze')}
+                    className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    <Coins size={16} /> 500
+                  </button>
+                </div>
+
+                <div className="p-6 rounded-2xl border-2 border-amber-50 bg-amber-50/30 flex flex-col justify-between">
+                  <div>
+                    <div className="flex justify-between items-start mb-4">
+                      <div className="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center text-amber-600">
+                        <Zap size={24} />
+                      </div>
+                      <div className="bg-amber-600 text-white text-[10px] font-black px-2 py-1 rounded-full uppercase">
+                        Owned: {userInventory.hint}
+                      </div>
+                    </div>
+                    <h3 className="text-xl font-bold text-slate-900 mb-2">Word Hint</h3>
+                    <p className="text-sm text-slate-500 mb-4">Reveal a random letter of the current word.</p>
+                  </div>
+                  <button 
+                    onClick={() => buyPowerup('hint')}
+                    className="w-full bg-amber-500 text-white py-3 rounded-xl font-bold hover:bg-amber-600 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    <Coins size={16} /> 200
+                  </button>
+                </div>
+
+                <div className="p-6 rounded-2xl border-2 border-emerald-50 bg-emerald-50/30 flex flex-col justify-between">
+                  <div>
+                    <div className="flex justify-between items-start mb-4">
+                      <div className="w-12 h-12 bg-emerald-100 rounded-xl flex items-center justify-center text-emerald-600">
+                        <Palette size={24} />
+                      </div>
+                      <div className="bg-emerald-600 text-white text-[10px] font-black px-2 py-1 rounded-full uppercase">
+                        Owned: {userInventory.reveal}
+                      </div>
+                    </div>
+                    <h3 className="text-xl font-bold text-slate-900 mb-2">Category Reveal</h3>
+                    <p className="text-sm text-slate-500 mb-4">Reveal the category of the current word.</p>
+                  </div>
+                  <button 
+                    onClick={() => buyPowerup('reveal')}
+                    className="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold hover:bg-emerald-700 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    <Coins size={16} /> 300
+                  </button>
+                </div>
+
+                <div className="p-6 rounded-2xl border-2 border-rose-50 bg-rose-50/30 flex flex-col justify-between">
+                  <div>
+                    <div className="flex justify-between items-start mb-4">
+                      <div className="w-12 h-12 bg-rose-100 rounded-xl flex items-center justify-center text-rose-600">
+                        <Play size={24} />
+                      </div>
+                      <div className="bg-rose-600 text-white text-[10px] font-black px-2 py-1 rounded-full uppercase">
+                        Owned: {userInventory.skip}
+                      </div>
+                    </div>
+                    <h3 className="text-xl font-bold text-slate-900 mb-2">Skip Word</h3>
+                    <p className="text-sm text-slate-500 mb-4">Get a new word if you're the drawer.</p>
+                  </div>
+                  <button 
+                    onClick={() => buyPowerup('skip')}
+                    disabled={currentRoom && currentRoom.status === 'playing' && user.uid !== currentRoom.currentDrawerId}
+                    className="w-full bg-rose-600 text-white py-3 rounded-xl font-bold hover:bg-rose-700 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    <Coins size={16} /> 250
+                  </button>
+                </div>
+              </div>
+
+              {!currentRoom && (
+                <p className="mt-6 text-center text-sm text-slate-400 italic">
+                  Power-ups purchased here will be added to your inventory for future games.
+                </p>
+              )}
+            </div>
+          </motion.div>
+        )}
+
         {view === 'landing' && (
           <motion.div 
             key="landing"
@@ -691,7 +1193,7 @@ export default function App() {
             className="max-w-4xl mx-auto pt-20 px-4"
           >
             <div className="text-center mb-12">
-              <h1 className="text-6xl font-black text-indigo-600 mb-4 italic tracking-tighter">ZOODLE</h1>
+              <h1 className="text-6xl font-black text-slate-900 mb-4 italic tracking-tighter">ZOODLE</h1>
               <div className="flex items-center justify-center gap-6">
                 <div className="flex items-center gap-4 text-slate-500 font-medium">
                   <span className="flex items-center gap-1"><Trophy size={16} className="text-amber-500" /> Compete</span>
@@ -699,9 +1201,21 @@ export default function App() {
                   <span className="flex items-center gap-1"><Coins size={16} className="text-yellow-500" /> Earn</span>
                 </div>
                 <div className="h-8 w-px bg-slate-200" />
-                <div className="bg-yellow-50 px-4 py-2 rounded-full border border-yellow-100 flex items-center gap-2 shadow-sm">
-                  <Coins size={20} className="text-yellow-500" />
-                  <span className="font-black text-yellow-700 text-lg">{userCoins}</span>
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => {
+                      setPreviousView('landing');
+                      setView('shop');
+                    }}
+                    className="bg-white px-4 py-2 rounded-full border border-slate-200 shadow-sm hover:bg-slate-50 transition-all flex items-center gap-2"
+                  >
+                    <ShoppingBag size={18} className="text-indigo-600" />
+                    <span className="text-sm font-bold">Shop</span>
+                  </button>
+                  <div className="bg-yellow-50 px-4 py-2 rounded-full border border-yellow-100 flex items-center gap-2 shadow-sm">
+                    <Coins size={20} className="text-yellow-500" />
+                    <span className="font-black text-yellow-700 text-lg">{userCoins}</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -709,13 +1223,21 @@ export default function App() {
             <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-200">
               <div className="mb-8">
                 <label className="block text-sm font-bold text-slate-700 mb-2 uppercase tracking-wider">Your Nickname</label>
-                <input 
-                  type="text" 
-                  value={playerName}
-                  onChange={(e) => setPlayerName(e.target.value)}
-                  placeholder="Enter a cool name..."
-                  className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-6 py-4 text-lg font-bold focus:border-indigo-500 focus:outline-none transition-colors"
-                />
+                <div className="flex gap-2">
+                  <input 
+                    type="text" 
+                    value={playerName}
+                    onChange={(e) => setPlayerName(e.target.value)}
+                    placeholder="Enter a cool name..."
+                    className="flex-1 bg-slate-50 border-2 border-slate-100 rounded-2xl px-6 py-4 text-lg font-bold focus:border-indigo-500 focus:outline-none transition-colors"
+                  />
+                  <button 
+                    onClick={() => updatePlayerName(playerName)}
+                    className="bg-indigo-600 text-white px-6 rounded-2xl font-bold hover:bg-indigo-700 transition-all"
+                  >
+                    Save
+                  </button>
+                </div>
               </div>
 
               <div className="mb-8">
@@ -816,11 +1338,24 @@ export default function App() {
                   </h3>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                     {players.map(p => (
-                      <div key={p.id} className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex flex-col items-center gap-2">
+                      <div key={p.id} className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex flex-col items-center gap-2 relative group">
                         <div className="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600">
-                          <User size={24} />
+                          <UserIcon size={24} />
                         </div>
-                        <span className="font-bold text-slate-700 truncate w-full text-center">{p.name}</span>
+                        {p.id === user.uid ? (
+                          <div className="flex items-center gap-1 w-full">
+                            <input 
+                              type="text" 
+                              value={playerName}
+                              onChange={(e) => setPlayerName(e.target.value)}
+                              onBlur={() => updatePlayerName(playerName)}
+                              onKeyDown={(e) => e.key === 'Enter' && updatePlayerName(playerName)}
+                              className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1 text-sm font-bold text-center focus:border-indigo-500 focus:outline-none"
+                            />
+                          </div>
+                        ) : (
+                          <span className="font-bold text-slate-700 truncate w-full text-center">{p.name}</span>
+                        )}
                         {p.isHost && <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-bold uppercase">Host</span>}
                       </div>
                     ))}
@@ -828,14 +1363,43 @@ export default function App() {
                 </div>
 
                 <div className="flex flex-col justify-end gap-4">
-                  {players.find(p => p.id === user.uid)?.isHost ? (
-                    <button 
-                      onClick={startGame}
-                      disabled={players.length < 2}
-                      className="w-full bg-indigo-600 text-white p-6 rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg disabled:opacity-50"
-                    >
-                      Start Game
-                    </button>
+                  {currentRoom.hostId === user.uid ? (
+                    <div className="flex flex-col gap-2">
+                      <button 
+                        onClick={startGame}
+                        className="w-full bg-indigo-600 text-white p-6 rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg"
+                      >
+                        Start Game
+                      </button>
+                      {players.length < 3 && (
+                        <button 
+                          onClick={async () => {
+                            setLoading(true);
+                            try {
+                              const botId = `bot_${Math.random().toString(36).substr(2, 9)}`;
+                              await setDoc(doc(db, 'rooms', currentRoom.id, 'players', botId), {
+                                name: BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)],
+                                score: 0,
+                                coins: 0,
+                                isReady: true,
+                                isHost: false,
+                                isBot: true,
+                                lastActive: new Date().toISOString()
+                              });
+                              showToast('Bot added!');
+                            } catch (e) {
+                              console.error(e);
+                            } finally {
+                              setLoading(false);
+                            }
+                          }}
+                          className="w-full bg-amber-50 text-amber-600 p-3 rounded-xl font-bold border border-amber-100 hover:bg-amber-100 transition-all flex items-center justify-center gap-2"
+                        >
+                          <Plus size={16} />
+                          Add AI Bot
+                        </button>
+                      )}
+                    </div>
                   ) : (
                     <div className="bg-slate-100 p-6 rounded-2xl text-center text-slate-500 font-medium">
                       Waiting for host to start...
@@ -897,6 +1461,16 @@ export default function App() {
               </div>
 
               <div className="flex items-center gap-4">
+                <button 
+                  onClick={() => {
+                    setPreviousView('game');
+                    setView('shop');
+                  }}
+                  className="bg-white px-4 py-2 rounded-full border border-slate-200 shadow-sm hover:bg-slate-50 transition-all flex items-center gap-2"
+                >
+                  <ShoppingBag size={18} className="text-indigo-600" />
+                  <span className="text-sm font-bold">Shop</span>
+                </button>
                 <div className="bg-yellow-50 px-4 py-2 rounded-full border border-yellow-100 flex items-center gap-2">
                   <Coins size={16} className="text-yellow-500" />
                   <span className="font-bold text-yellow-700">{players.find(p => p.id === user.uid)?.coins || 0}</span>
@@ -906,11 +1480,49 @@ export default function App() {
 
             {/* Game Body */}
             <div className="flex-1 flex gap-4 overflow-hidden">
-              {/* Sidebar Left */}
-              <div className="w-64 flex flex-col gap-4">
-                <PlayerList players={players} currentDrawerId={currentRoom.currentDrawerId} />
-                
-                {user.uid === currentRoom.currentDrawerId && (
+                {/* Sidebar Left */}
+                <div className="w-64 flex flex-col gap-4 overflow-y-auto pr-2">
+                  <PlayerList players={players} currentDrawerId={currentRoom.currentDrawerId} />
+                  
+                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-4">
+                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Inventory</h3>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button 
+                        onClick={() => usePowerup('freeze')}
+                        disabled={userInventory.freeze <= 0}
+                        className="p-2 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-all flex flex-col items-center gap-1 disabled:opacity-50"
+                      >
+                        <Clock size={16} />
+                        <span className="text-[10px] font-black">{userInventory.freeze}</span>
+                      </button>
+                      <button 
+                        onClick={() => usePowerup('hint')}
+                        disabled={userInventory.hint <= 0}
+                        className="p-2 rounded-lg bg-amber-50 text-amber-600 hover:bg-amber-100 transition-all flex flex-col items-center gap-1 disabled:opacity-50"
+                      >
+                        <Zap size={16} />
+                        <span className="text-[10px] font-black">{userInventory.hint}</span>
+                      </button>
+                      <button 
+                        onClick={() => usePowerup('reveal')}
+                        disabled={userInventory.reveal <= 0}
+                        className="p-2 rounded-lg bg-emerald-50 text-emerald-600 hover:bg-emerald-100 transition-all flex flex-col items-center gap-1 disabled:opacity-50"
+                      >
+                        <Palette size={16} />
+                        <span className="text-[10px] font-black">{userInventory.reveal}</span>
+                      </button>
+                      <button 
+                        onClick={() => usePowerup('skip')}
+                        disabled={userInventory.skip <= 0 || user.uid !== currentRoom.currentDrawerId}
+                        className="p-2 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 transition-all flex flex-col items-center gap-1 disabled:opacity-50"
+                      >
+                        <Play size={16} />
+                        <span className="text-[10px] font-black">{userInventory.skip}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {user.uid === currentRoom.currentDrawerId && (
                   <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-4">
                     <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Tools</h3>
                     <div className="grid grid-cols-2 gap-2">
@@ -1012,6 +1624,10 @@ export default function App() {
               <div className="mb-8 p-4 bg-indigo-50 rounded-2xl border border-indigo-100 flex items-center justify-center gap-3">
                 <Coins size={24} className="text-yellow-500" />
                 <span className="text-indigo-900 font-bold">Total Persistent Coins: <span className="text-xl font-black">{userCoins}</span></span>
+              </div>
+
+              <div className="mb-6 text-slate-400 text-sm font-medium">
+                Returning to home in <span className="text-indigo-600 font-bold">{resultsCountdown}s</span>...
               </div>
 
               <button 

@@ -11,6 +11,7 @@ service cloud.firestore {
     //   - displayName: string (required)
     //   - totalCoins: number (required, >= 0)
     //   - lastActive: timestamp (required)
+    //   - role: string (optional, enum: ['user', 'admin'])
     //
     // Collection: rooms
     // Document ID: {roomId}
@@ -25,6 +26,8 @@ service cloud.firestore {
     //   - timeLeft: number (required)
     //   - createdAt: timestamp (required)
     //   - lastActive: timestamp (required)
+    //   - hostId: string (required)
+    //   - isQuickPlay: bool (optional)
     //
     // Sub-collection: rooms/{roomId}/players
     // Document ID: {playerId}
@@ -35,6 +38,7 @@ service cloud.firestore {
     //   - isReady: bool (required)
     //   - isHost: bool (required)
     //   - lastActive: string (required, ISO 8601)
+    //   - isBot: bool (optional)
     //
     // Sub-collection: rooms/{roomId}/messages
     // Document ID: {messageId}
@@ -63,7 +67,7 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', 'user') == 'admin' ||
           (request.auth.token.email == "nawinrajpandiarajan@gmail.com" && request.auth.token.email_verified == true));
     }
 
@@ -79,11 +83,16 @@ service cloud.firestore {
       return request.resource.data.keys().hasOnly(fields);
     }
 
+    function isRecent(time) {
+      return time is timestamp && time > request.time - duration.value(5, 'm') && time < request.time + duration.value(5, 'm');
+    }
+
     function isValidUser(data) {
-      return hasOnlyAllowedFields(['displayName', 'totalCoins', 'lastActive', 'role']) &&
+      return hasOnlyAllowedFields(['displayName', 'totalCoins', 'inventory', 'lastActive', 'role']) &&
              data.displayName is string && data.displayName.size() > 0 && data.displayName.size() < 50 &&
              data.totalCoins is number && data.totalCoins >= 0 &&
-             (!('role' in data) || data.role == 'user');
+             (!('inventory' in data) || data.inventory is map) &&
+             (!('role' in data) || data.role in ['user', 'admin']);
     }
 
     function isValidRoom(data) {
@@ -94,33 +103,41 @@ service cloud.firestore {
              data.currentRound is number &&
              data.totalRounds is number &&
              data.timeLeft is number &&
-             data.createdAt is timestamp &&
+             (data.createdAt is timestamp || data.createdAt == null) &&
+             (data.lastActive is timestamp || data.lastActive == null) &&
              data.hostId is string &&
              (!('isQuickPlay' in data) || data.isQuickPlay is bool);
     }
 
     function isValidPlayer(data) {
-      return hasOnlyAllowedFields(['name', 'score', 'coins', 'isReady', 'isHost', 'lastActive', 'isBot']) &&
+      return hasOnlyAllowedFields(['name', 'score', 'coins', 'isReady', 'isHost', 'lastActive', 'isBot', 'hasGuessedCorrectly']) &&
              data.name is string && data.name.size() > 0 && data.name.size() < 50 &&
              data.score is number &&
              data.coins is number &&
              data.isReady is bool &&
              data.isHost is bool &&
-             (!('isBot' in data) || data.isBot is bool);
+             (!('lastActive' in data) || data.lastActive is string) &&
+             (!('isBot' in data) || data.isBot is bool) &&
+             (!('hasGuessedCorrectly' in data) || data.hasGuessedCorrectly is bool);
+    }
+
+    // Test collection for connection check
+    match /test/{docId} {
+      allow read: if isAuthenticated();
     }
 
     // User rules
     match /users/{userId} {
       allow read: if isAuthenticated();
-      allow create: if isOwner(userId) && isValidUser(request.resource.data);
-      allow update: if (isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == resource.data.role) || isAdmin();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.get('role', 'user') == 'user';
+      allow update: if (isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.get('role', 'user') == resource.data.get('role', 'user')) || isAdmin();
     }
 
     // Room rules
     match /rooms/{roomId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && isValidRoom(request.resource.data);
-      allow update: if isAuthenticated() && isValidRoom(request.resource.data);
+      allow create: if isAuthenticated() && isValidRoom(request.resource.data) && request.resource.data.hostId == request.auth.uid;
+      allow update: if isAuthenticated() && isValidRoom(request.resource.data) && (isHost(roomId) || isPlayerInRoom(roomId));
       
       match /players/{playerId} {
         allow read: if isAuthenticated();
@@ -131,7 +148,11 @@ service cloud.firestore {
       
       match /messages/{messageId} {
         allow read: if isPlayerInRoom(roomId);
-        allow create: if isPlayerInRoom(roomId) && (request.resource.data.senderId == request.auth.uid || request.resource.data.senderId == 'system');
+        allow create: if isPlayerInRoom(roomId) && (
+          request.resource.data.senderId == request.auth.uid || 
+          request.resource.data.senderId == 'system' ||
+          (isHost(roomId) && get(/databases/$(database)/documents/rooms/$(roomId)/players/$(request.resource.data.senderId)).data.isBot == true)
+        );
       }
       
       match /drawing/current {

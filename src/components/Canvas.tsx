@@ -40,8 +40,14 @@ export const Canvas: React.FC<CanvasProps> = ({
   const handleMouseDown = (e: any) => {
     if (isReadOnly) return;
     isDrawing.current = true;
-    const pos = e.target.getStage().getPointerPosition();
-    onDraw?.([...lines, { tool: 'pen', points: [pos.x, pos.y], color, strokeWidth }]);
+    const stage = e.target.getStage();
+    const pos = stage.getPointerPosition();
+    
+    // Normalize coordinates
+    const normalizedX = (pos.x / containerSize.width) * 1000;
+    const normalizedY = (pos.y / containerSize.height) * 1000;
+    
+    onDraw?.([...lines, { tool: 'pen', points: [normalizedX, normalizedY], color, strokeWidth }]);
   };
 
   const handleMouseMove = (e: any) => {
@@ -49,6 +55,11 @@ export const Canvas: React.FC<CanvasProps> = ({
 
     const stage = e.target.getStage();
     const point = stage.getPointerPosition();
+    
+    // Normalize coordinates
+    const normalizedX = (point.x / containerSize.width) * 1000;
+    const normalizedY = (point.y / containerSize.height) * 1000;
+    
     const lastLine = lines[lines.length - 1];
     
     if (!lastLine) return;
@@ -56,7 +67,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     // Add point to the last line
     const newLastLine = {
       ...lastLine,
-      points: lastLine.points.concat([point.x, point.y])
+      points: lastLine.points.concat([normalizedX, normalizedY])
     };
 
     const newLines = [...lines.slice(0, -1), newLastLine];
@@ -84,7 +95,11 @@ export const Canvas: React.FC<CanvasProps> = ({
           {lines.map((line, i) => (
             <Line
               key={i}
-              points={line.points}
+              points={line.points.map((p, idx) => {
+                // De-normalize coordinates for rendering
+                const scale = idx % 2 === 0 ? containerSize.width / 1000 : containerSize.height / 1000;
+                return p * scale;
+              })}
               stroke={line.color}
               strokeWidth={line.strokeWidth}
               tension={0.5}

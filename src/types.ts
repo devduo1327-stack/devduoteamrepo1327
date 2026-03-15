@@ -6,6 +6,7 @@ export interface Player {
   isReady: boolean;
   isHost: boolean;
   isBot?: boolean;
+  hasGuessedCorrectly?: boolean;
   lastActive: string;
 }
 
@@ -38,4 +39,17 @@ export interface DrawingLine {
   points: number[];
   color: string;
   strokeWidth: number;
+}
+
+export interface UserProfile {
+  uid: string;
+  displayName: string;
+  totalCoins: number;
+  inventory: {
+    freeze: number;
+    hint: number;
+    reveal: number;
+    skip: number;
+  };
+  lastActive: string;
 }

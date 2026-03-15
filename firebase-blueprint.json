@@ -1,5 +1,26 @@
 {
   "entities": {
+    "User": {
+      "title": "User",
+      "description": "Persistent user profile and coin balance",
+      "type": "object",
+      "properties": {
+        "displayName": { "type": "string" },
+        "totalCoins": { "type": "integer" },
+        "inventory": {
+          "type": "object",
+          "properties": {
+            "freeze": { "type": "integer" },
+            "hint": { "type": "integer" },
+            "reveal": { "type": "integer" },
+            "skip": { "type": "integer" }
+          }
+        },
+        "lastActive": { "type": "string", "format": "date-time" },
+        "role": { "type": "string", "enum": ["user", "admin"] }
+      },
+      "required": ["displayName", "totalCoins", "lastActive"]
+    },
     "Room": {
       "title": "Room",
       "description": "A game room where players join to play Zoodle",
@@ -27,6 +48,8 @@
         "coins": { "type": "integer" },
         "isReady": { "type": "boolean" },
         "isHost": { "type": "boolean" },
+        "isBot": { "type": "boolean" },
+        "hasGuessedCorrectly": { "type": "boolean" },
         "lastActive": { "type": "string", "format": "date-time" }
       },
       "required": ["name", "score", "coins"]
@@ -56,6 +79,10 @@
     }
   },
   "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
     "/rooms/{roomId}": {
       "schema": "Room",
       "description": "Game room details"
