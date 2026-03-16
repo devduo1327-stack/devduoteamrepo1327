@@ -158,21 +158,7 @@ const audioCache: Record<string, HTMLAudioElement> = {};
 
 const bgmAudio = new Audio(SOUNDS.BGM);
 bgmAudio.loop = true;
-bgmAudio.volume = 0.15;
-
-const playSound = (url: string) => {
-  try {
-    if (!audioCache[url]) {
-      audioCache[url] = new Audio(url);
-    }
-    const audio = audioCache[url];
-    audio.currentTime = 0;
-    audio.volume = 0.4;
-    audio.play().catch(e => console.warn("Audio play blocked or failed:", e));
-  } catch (e) {
-    console.error("Sound error:", e);
-  }
-};
+bgmAudio.preload = 'auto';
 
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
@@ -203,7 +189,23 @@ export default function App() {
   const [userStats, setUserStats] = useState({ wins: 0, totalPoints: 0, gamesPlayed: 0 });
   const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined);
   const [isBgmEnabled, setIsBgmEnabled] = useState(false);
+  const [bgmVolume, setBgmVolume] = useState(0.3);
+  const [sfxVolume, setSfxVolume] = useState(0.5);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
+
+  const playSound = (url: string) => {
+    try {
+      if (!audioCache[url]) {
+        audioCache[url] = new Audio(url);
+      }
+      const audio = audioCache[url];
+      audio.currentTime = 0;
+      audio.volume = sfxVolume;
+      audio.play().catch(e => console.warn("Audio play blocked or failed:", e));
+    } catch (e) {
+      console.error("Sound error:", e);
+    }
+  };
   const [editName, setEditName] = useState('');
   const [editAvatar, setEditAvatar] = useState('');
   const [showInfo, setShowInfo] = useState(false);
@@ -229,6 +231,20 @@ export default function App() {
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
     setToast({ message: msg, type });
     setTimeout(() => setToast(null), 3000);
+  };
+
+  const toggleBgm = () => {
+    const nextState = !isBgmEnabled;
+    setIsBgmEnabled(nextState);
+    
+    if (nextState) {
+      bgmAudio.play().catch(e => {
+        console.warn("BGM play failed:", e);
+      });
+    } else {
+      bgmAudio.pause();
+    }
+    playSound(SOUNDS.CLICK);
   };
 
   // Loading simulation
@@ -271,13 +287,14 @@ export default function App() {
 
   // BGM Control
   useEffect(() => {
+    bgmAudio.volume = bgmVolume;
+    
     if (isBgmEnabled) {
       bgmAudio.play().catch(() => {});
     } else {
       bgmAudio.pause();
     }
-    return () => bgmAudio.pause();
-  }, [isBgmEnabled]);
+  }, [isBgmEnabled, bgmVolume]);
 
   // Auth listener
   useEffect(() => {
@@ -1547,8 +1564,9 @@ export default function App() {
               </div>
 
               <div className="space-y-6">
-                <div className="p-6 rounded-2xl border border-slate-100 bg-slate-50/50">
-                  <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Audio Settings</h3>
+                <div className="p-6 rounded-2xl border border-slate-100 bg-slate-50/50 space-y-6">
+                  <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest">Audio Settings</h3>
+                  
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center text-indigo-600">
@@ -1560,10 +1578,7 @@ export default function App() {
                       </div>
                     </div>
                     <button 
-                      onClick={() => {
-                        setIsBgmEnabled(!isBgmEnabled);
-                        playSound(SOUNDS.CLICK);
-                      }}
+                      onClick={toggleBgm}
                       className={cn(
                         "w-12 h-6 rounded-full transition-all relative",
                         isBgmEnabled ? "bg-indigo-600" : "bg-slate-300"
@@ -1574,6 +1589,32 @@ export default function App() {
                         isBgmEnabled ? "right-1" : "left-1"
                       )} />
                     </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-xs font-bold text-slate-400 uppercase">
+                      <span>Music Volume</span>
+                      <span>{Math.round(bgmVolume * 100)}%</span>
+                    </div>
+                    <input 
+                      type="range" min="0" max="1" step="0.05" 
+                      value={bgmVolume} 
+                      onChange={(e) => setBgmVolume(parseFloat(e.target.value))}
+                      className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-xs font-bold text-slate-400 uppercase">
+                      <span>SFX Volume</span>
+                      <span>{Math.round(sfxVolume * 100)}%</span>
+                    </div>
+                    <input 
+                      type="range" min="0" max="1" step="0.05" 
+                      value={sfxVolume} 
+                      onChange={(e) => setSfxVolume(parseFloat(e.target.value))}
+                      className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                    />
                   </div>
                 </div>
 
@@ -1698,10 +1739,7 @@ export default function App() {
                 <div className="h-8 w-px bg-slate-200" />
                 <div className="flex items-center gap-2">
                   <button 
-                    onClick={() => {
-                      setIsBgmEnabled(!isBgmEnabled);
-                      playSound(SOUNDS.CLICK);
-                    }}
+                    onClick={toggleBgm}
                     className={cn(
                       "p-2 rounded-full border transition-all",
                       isBgmEnabled ? "bg-indigo-50 border-indigo-200 text-indigo-600" : "bg-white border-slate-200 text-slate-400"
