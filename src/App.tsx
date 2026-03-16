@@ -30,14 +30,14 @@ import {
   User as FirebaseUser 
 } from 'firebase/auth';
 import { db, auth } from './firebase';
-import { Room, Player, Message, DrawingLine } from './types';
-import { WORD_LIST, THEME_WORDS, MODE_CONFIG, ROUND_TIME, TOTAL_ROUNDS, POINTS_PER_GUESS, COINS_PER_GUESS } from './constants';
+import { Room, Player, Message, DrawingLine, UserProfile } from './types';
+import { WORD_LIST, THEME_WORDS, MODE_CONFIG, ROUND_TIME, TOTAL_ROUNDS, POINTS_PER_GUESS, COINS_PER_GUESS, AVATARS } from './constants';
 import { getWordPoints } from './botDrawing';
 import { Canvas } from './components/Canvas';
 import { Chat } from './components/Chat';
 import { PlayerList } from './components/PlayerList';
 import { motion, AnimatePresence } from 'motion/react';
-import { Plus, LogIn, Trophy, Coins, Palette, Eraser, Trash2, Play, Crown, Loader2, AlertCircle, ShoppingBag, Clock, Zap, X, User as UserIcon } from 'lucide-react';
+import { Plus, LogIn, Trophy, Coins, Palette, Eraser, Trash2, Play, Crown, Loader2, AlertCircle, ShoppingBag, Clock, Zap, X, User as UserIcon, Music, CheckCircle, Edit2, Save, Star, LogOut, Settings, Info, Heart, ExternalLink } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -144,15 +144,34 @@ const BOT_NAMES = ["ZoodleBot", "DoodleMaster", "Sketchy", "Artie", "PicasBot"];
 const ADJECTIVES = ["Neon", "Cyber", "Digital", "Quantum", "Hyper", "Virtual", "Binary", "Pixel"];
 const NOUNS = ["Nexus", "Void", "Grid", "Matrix", "Circuit", "Node", "Core", "Link"];
 
-const playSound = (url: string) => {
-  const audio = new Audio(url);
-  audio.volume = 0.4;
-  audio.play().catch(() => {});
+const SOUNDS = {
+  TECH: "https://www.soundjay.com/buttons/sounds/button-16.mp3",
+  WINNER: "https://www.soundjay.com/human/sounds/cheering-01.mp3",
+  CLICK: "https://www.soundjay.com/buttons/sounds/button-3.mp3",
+  CORRECT: "https://www.soundjay.com/buttons/sounds/button-09.mp3",
+  POWERUP: "https://www.soundjay.com/buttons/sounds/button-11.mp3",
+  ROUND_START: "https://www.soundjay.com/misc/sounds/bell-ringing-05.mp3",
+  BGM: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
 };
 
-const SOUNDS = {
-  TECH: "https://assets.mixkit.co/active_storage/sfx/2568/2568-preview.mp3",
-  WINNER: "https://assets.mixkit.co/active_storage/sfx/1435/1435-preview.mp3"
+const audioCache: Record<string, HTMLAudioElement> = {};
+
+const bgmAudio = new Audio(SOUNDS.BGM);
+bgmAudio.loop = true;
+bgmAudio.volume = 0.15;
+
+const playSound = (url: string) => {
+  try {
+    if (!audioCache[url]) {
+      audioCache[url] = new Audio(url);
+    }
+    const audio = audioCache[url];
+    audio.currentTime = 0;
+    audio.volume = 0.4;
+    audio.play().catch(e => console.warn("Audio play blocked or failed:", e));
+  } catch (e) {
+    console.error("Sound error:", e);
+  }
 };
 
 export default function App() {
@@ -177,10 +196,18 @@ export default function App() {
   const [drawingLines, setDrawingLines] = useState<DrawingLine[]>([]);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<'landing' | 'lobby' | 'game' | 'results' | 'shop'>('landing');
-  const [previousView, setPreviousView] = useState<'landing' | 'lobby' | 'game' | 'results'>('landing');
+  const [view, setView] = useState<'landing' | 'lobby' | 'game' | 'results' | 'shop' | 'profile' | 'settings'>('landing');
+  const [previousView, setPreviousView] = useState<'landing' | 'lobby' | 'game' | 'results' | 'profile' | 'settings'>('landing');
   const [userCoins, setUserCoins] = useState(0);
   const [userInventory, setUserInventory] = useState({ freeze: 0, hint: 0, reveal: 0, skip: 0 });
+  const [userStats, setUserStats] = useState({ wins: 0, totalPoints: 0, gamesPlayed: 0 });
+  const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined);
+  const [isBgmEnabled, setIsBgmEnabled] = useState(false);
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editAvatar, setEditAvatar] = useState('');
+  const [showInfo, setShowInfo] = useState(false);
+  const [revealedLetters, setRevealedLetters] = useState<Record<number, string>>({});
   const drawingLinesRef = useRef<DrawingLine[]>([]);
 
   useEffect(() => {
@@ -191,15 +218,16 @@ export default function App() {
   const [brushColor, setBrushColor] = useState('#000000');
   const [brushWidth, setBrushWidth] = useState(5);
   const [tool, setTool] = useState<'pen' | 'eraser'>('pen');
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
   const [selectedMode, setSelectedMode] = useState<'classic' | 'theme' | 'speed'>('classic');
   const [resultsCountdown, setResultsCountdown] = useState(20);
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [loadingText, setLoadingText] = useState('Loading assets...');
   const [isAppReady, setIsAppReady] = useState(false);
+  const [hasUpdatedStats, setHasUpdatedStats] = useState(false);
 
-  const showToast = (msg: string) => {
-    setToast(msg);
+  const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message: msg, type });
     setTimeout(() => setToast(null), 3000);
   };
 
@@ -241,14 +269,15 @@ export default function App() {
     return () => clearInterval(interval);
   }, [loading]);
 
-  // Winner sound effect when entering results view
+  // BGM Control
   useEffect(() => {
-    if (view === 'results') {
-      playSound(SOUNDS.WINNER);
-      // Play again after a short delay for "sounds" (plural)
-      setTimeout(() => playSound(SOUNDS.WINNER), 1500);
+    if (isBgmEnabled) {
+      bgmAudio.play().catch(() => {});
+    } else {
+      bgmAudio.pause();
     }
-  }, [view]);
+    return () => bgmAudio.pause();
+  }, [isBgmEnabled]);
 
   // Auth listener
   useEffect(() => {
@@ -283,6 +312,8 @@ export default function App() {
         const data = doc.data();
         setUserCoins(data.totalCoins || 0);
         setUserInventory(data.inventory || { freeze: 0, hint: 0, reveal: 0, skip: 0 });
+        setUserStats(data.stats || { wins: 0, totalPoints: 0, gamesPlayed: 0 });
+        setAvatarUrl(data.avatarUrl);
         if (data.displayName && !playerName) {
           setPlayerName(data.displayName);
         }
@@ -294,6 +325,7 @@ export default function App() {
           displayName: initialName,
           totalCoins: 0,
           inventory: { freeze: 0, hint: 0, reveal: 0, skip: 0 },
+          stats: { wins: 0, totalPoints: 0, gamesPlayed: 0 },
           lastActive: serverTimestamp()
         }, { merge: true }).catch(e => handleFirestoreError(e, OperationType.WRITE, `users/${user.uid}`));
       }
@@ -382,6 +414,51 @@ export default function App() {
     return () => clearInterval(timer);
   }, [view]);
 
+  // Stats tracking on game finish
+  useEffect(() => {
+    if (view === 'results' && currentRoom && !hasUpdatedStats && user) {
+      const updateStats = async () => {
+        const userRef = doc(db, 'users', user.uid);
+        const currentPlayer = players.find(p => p.id === user.uid);
+        if (!currentPlayer) return;
+
+        // Determine if won
+        const sortedPlayers = [...players].sort((a, b) => b.score - a.score);
+        const isWinner = sortedPlayers[0]?.id === user.uid;
+
+        try {
+          await runTransaction(db, async (transaction) => {
+            const uSnap = await transaction.get(userRef);
+            if (!uSnap.exists()) return;
+            const uData = uSnap.data();
+            const stats = uData.stats || { wins: 0, totalPoints: 0, gamesPlayed: 0 };
+            
+            transaction.update(userRef, {
+              stats: {
+                wins: stats.wins + (isWinner ? 1 : 0),
+                totalPoints: stats.totalPoints + currentPlayer.score,
+                gamesPlayed: stats.gamesPlayed + 1
+              }
+            });
+          });
+          setHasUpdatedStats(true);
+        } catch (e) {
+          console.error("Failed to update stats:", e);
+        }
+      };
+      updateStats();
+    } else if (view !== 'results') {
+      setHasUpdatedStats(false);
+    }
+  }, [view, currentRoom?.id, user, players]);
+
+  useEffect(() => {
+    if (view === 'results') {
+      confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
+      playSound(SOUNDS.WINNER);
+    }
+  }, [view]);
+
   // Timer logic (only for host)
   useEffect(() => {
     if (!currentRoom || currentRoom.status !== 'playing' || !user) return;
@@ -405,25 +482,57 @@ export default function App() {
 
   // Bot logic (only for host)
   const botDrawingStepRef = useRef<number>(0);
+  const lastBotWordRef = useRef<string>('');
+
   useEffect(() => {
     if (!currentRoom || currentRoom.status !== 'playing' || !user) return;
-    
     if (currentRoom.hostId !== user.uid) return;
 
     const bots = players.filter(p => p.isBot);
     if (bots.length === 0) return;
 
+    // Reset drawing step if word changes
+    if (currentRoom.currentWord !== lastBotWordRef.current) {
+      botDrawingStepRef.current = 0;
+      lastBotWordRef.current = currentRoom.currentWord;
+    }
+
     const botInterval = setInterval(async () => {
-      const activeBot = bots[Math.floor(Math.random() * bots.length)];
-      
-      // Bot Guessing
-      if (activeBot.id !== currentRoom.currentDrawerId && !activeBot.hasGuessedCorrectly) {
-        // 25% chance to guess correctly every 4 seconds
+      const drawerBot = bots.find(b => b.id === currentRoom.currentDrawerId);
+      const guessingBots = bots.filter(b => b.id !== currentRoom.currentDrawerId && !b.hasGuessedCorrectly);
+
+      // Bot Drawing (if a bot is the drawer)
+      if (drawerBot) {
+        const word = currentRoom.currentWord;
+        // Center the drawing
+        const wordWidth = word.length * 120 * 1.2;
+        const startX = Math.max(50, (1000 - wordWidth) / 2);
+        const startY = 400;
+        const allLines = getWordPoints(word, startX, startY, 120);
+        
+        if (botDrawingStepRef.current < allLines.length) {
+          const linePoints = allLines[botDrawingStepRef.current];
+          const newLine: DrawingLine = {
+            tool: 'pen',
+            points: linePoints,
+            color: '#000000',
+            strokeWidth: 6
+          };
+          const updatedLines = [...drawingLinesRef.current, newLine];
+          await handleDraw(updatedLines);
+          botDrawingStepRef.current++;
+        }
+      }
+
+      // Bot Guessing (one random guessing bot per interval)
+      if (guessingBots.length > 0 && Math.random() < 0.4) {
+        const activeBot = guessingBots[Math.floor(Math.random() * guessingBots.length)];
+        
+        // 25% chance to guess correctly
         const shouldGuessCorrect = Math.random() < 0.25;
         if (shouldGuessCorrect) {
           await handleBotGuess(activeBot, currentRoom.currentWord);
-        } else if (Math.random() < 0.3) {
-          // 30% chance to guess something random
+        } else {
           const randomGuesses = [
             "Is it a cat?", "Looks like a tree", "Maybe a house?", "I don't know!", 
             "Cool drawing!", "What is that?", "Interesting...", "Hmm...", 
@@ -433,28 +542,7 @@ export default function App() {
           await handleBotGuess(activeBot, randomGuesses[Math.floor(Math.random() * randomGuesses.length)]);
         }
       }
-
-      // Bot Drawing (if bot is drawer)
-      if (activeBot.id === currentRoom.currentDrawerId) {
-        const word = currentRoom.currentWord;
-        const allLines = getWordPoints(word, 50, 150, 30);
-        
-        if (botDrawingStepRef.current < allLines.length) {
-          const linePoints = allLines[botDrawingStepRef.current];
-          const newLine: DrawingLine = {
-            tool: 'pen',
-            points: linePoints,
-            color: '#000000',
-            strokeWidth: 4
-          };
-          const updatedLines = [...drawingLinesRef.current, newLine];
-          await handleDraw(updatedLines);
-          botDrawingStepRef.current++;
-        }
-      } else {
-        botDrawingStepRef.current = 0;
-      }
-    }, 3000);
+    }, 1000); // Faster interval for smoother drawing
 
     return () => clearInterval(botInterval);
   }, [currentRoom?.id, currentRoom?.status, currentRoom?.currentDrawerId, currentRoom?.hostId, currentRoom?.currentWord, players, user]);
@@ -503,8 +591,6 @@ export default function App() {
     const nextRound = currentRoom.currentRound + 1;
     if (nextRound > config.totalRounds) {
       await updateDoc(doc(db, 'rooms', currentRoom.id), { status: 'finished' });
-      confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
-      playSound(SOUNDS.WINNER);
     } else {
       // Pick next drawer
       const currentIndex = players.findIndex(p => p.id === currentRoom.currentDrawerId);
@@ -530,6 +616,10 @@ export default function App() {
         })
       );
       await Promise.all(batch);
+
+      setRevealedLetters({}); // Clear revealed letters for new round
+      playSound(SOUNDS.ROUND_START);
+      botDrawingStepRef.current = 0;
 
       await updateDoc(doc(db, 'rooms', currentRoom.id), {
         currentRound: nextRound,
@@ -572,6 +662,7 @@ export default function App() {
       const playerRef = doc(db, 'rooms', roomId, 'players', user.uid);
       await setDoc(playerRef, {
         name: playerName,
+        avatarUrl: avatarUrl || null,
         score: 0,
         coins: 0,
         isReady: isHost,
@@ -616,6 +707,7 @@ export default function App() {
       const playerRef = doc(db, 'rooms', roomRef.id, 'players', user.uid);
       await setDoc(playerRef, {
         name: playerName,
+        avatarUrl: avatarUrl || null,
         score: 0,
         coins: 0,
         isReady: true,
@@ -687,6 +779,8 @@ export default function App() {
       timeLeft: config.roundTime
     });
 
+    botDrawingStepRef.current = 0;
+
     await addDoc(collection(db, 'rooms', room.id, 'messages'), {
       senderId: 'system',
       senderName: 'System',
@@ -732,6 +826,36 @@ export default function App() {
     }
   };
 
+  const handleUpdateProfile = async () => {
+    if (!user || !editName.trim()) return;
+    
+    try {
+      const userRef = doc(db, 'users', user.uid);
+      await updateDoc(userRef, {
+        displayName: editName.trim(),
+        avatarUrl: editAvatar.trim()
+      });
+      
+      setPlayerName(editName.trim());
+      setAvatarUrl(editAvatar.trim());
+      
+      // Update in current room if in one
+      if (currentRoom) {
+        const playerRef = doc(db, 'rooms', currentRoom.id, 'players', user.uid);
+        await updateDoc(playerRef, { 
+          name: editName.trim(),
+          avatarUrl: editAvatar.trim() 
+        }).catch(() => {});
+      }
+      
+      setIsEditingProfile(false);
+      showToast('Profile updated successfully!', 'success');
+    } catch (e) {
+      console.error("Failed to update profile:", e);
+      showToast('Failed to update profile', 'error');
+    }
+  };
+
   const handleSendMessage = async (text: string) => {
     if (!currentRoom || !user) return;
 
@@ -743,6 +867,7 @@ export default function App() {
 
     if (isCorrect && !isDrawer && currentRoom.status === 'playing' && !currentPlayer?.hasGuessedCorrectly) {
       // Correct guess!
+      playSound(SOUNDS.CORRECT);
       await addDoc(collection(db, 'rooms', currentRoom.id, 'messages'), {
         senderId: 'system',
         senderName: 'System',
@@ -869,6 +994,7 @@ export default function App() {
 
       // Handle side effects outside transaction
       if (isPlaying) {
+        playSound(SOUNDS.POWERUP);
         if (type === 'freeze') {
           await addDoc(collection(db, 'rooms', currentRoom.id, 'messages'), {
             senderId: 'system',
@@ -879,9 +1005,21 @@ export default function App() {
           });
         } else if (type === 'hint') {
           const word = currentRoom.currentWord;
-          const hintIndex = Math.floor(Math.random() * word.length);
-          const hintChar = word[hintIndex];
-          showToast(`Hint: The word has '${hintChar}' at position ${hintIndex + 1}`);
+          const unrevealedIndices = [];
+          for (let i = 0; i < word.length; i++) {
+            if (word[i] !== ' ' && !revealedLetters[i]) {
+              unrevealedIndices.push(i);
+            }
+          }
+          
+          if (unrevealedIndices.length > 0) {
+            const hintIndex = unrevealedIndices[Math.floor(Math.random() * unrevealedIndices.length)];
+            const hintChar = word[hintIndex];
+            setRevealedLetters(prev => ({ ...prev, [hintIndex]: hintChar }));
+            showToast(`Hint: The word has '${hintChar}' at position ${hintIndex + 1}`);
+          } else {
+            showToast("All letters already revealed!");
+          }
         } else if (type === 'reveal') {
           const word = currentRoom.currentWord;
           let category = "General";
@@ -893,6 +1031,7 @@ export default function App() {
           }
           showToast(`Category: This word is related to ${category}`);
         } else if (type === 'skip') {
+          setRevealedLetters({});
           await addDoc(collection(db, 'rooms', currentRoom.id, 'messages'), {
             senderId: 'system',
             senderName: 'System',
@@ -956,6 +1095,7 @@ export default function App() {
       });
 
       // Handle side effects
+      playSound(SOUNDS.POWERUP);
       if (type === 'freeze') {
         await addDoc(collection(db, 'rooms', currentRoom.id, 'messages'), {
           senderId: 'system',
@@ -966,9 +1106,22 @@ export default function App() {
         });
       } else if (type === 'hint') {
         const word = currentRoom.currentWord;
-        const hintIndex = Math.floor(Math.random() * word.length);
-        const hintChar = word[hintIndex];
-        showToast(`Hint: The word has '${hintChar}' at position ${hintIndex + 1}`);
+        // Find indices that haven't been revealed yet
+        const unrevealedIndices = [];
+        for (let i = 0; i < word.length; i++) {
+          if (word[i] !== ' ' && !revealedLetters[i]) {
+            unrevealedIndices.push(i);
+          }
+        }
+        
+        if (unrevealedIndices.length > 0) {
+          const hintIndex = unrevealedIndices[Math.floor(Math.random() * unrevealedIndices.length)];
+          const hintChar = word[hintIndex];
+          setRevealedLetters(prev => ({ ...prev, [hintIndex]: hintChar }));
+          showToast(`Hint: The word has '${hintChar}' at position ${hintIndex + 1}`);
+        } else {
+          showToast("All letters already revealed!");
+        }
       } else if (type === 'reveal') {
         const word = currentRoom.currentWord;
         let category = "General";
@@ -980,6 +1133,7 @@ export default function App() {
         }
         showToast(`Category: This word is related to ${category}`);
       } else if (type === 'skip') {
+        setRevealedLetters({});
         await addDoc(collection(db, 'rooms', currentRoom.id, 'messages'), {
           senderId: 'system',
           senderName: 'System',
@@ -1071,6 +1225,181 @@ export default function App() {
       <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
         <AnimatePresence mode="wait">
           {/* ... existing views ... */}
+        {view === 'profile' && (
+          <motion.div 
+            key="profile"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="max-w-2xl mx-auto pt-20 px-4"
+          >
+            <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100">
+              <div className="flex items-center justify-between mb-8">
+                <h2 className="text-3xl font-black text-slate-900 italic uppercase">User Profile</h2>
+                <div className="flex items-center gap-2">
+                  {!isEditingProfile ? (
+                    <button 
+                      onClick={() => {
+                        setEditName(playerName);
+                        setEditAvatar(avatarUrl || '');
+                        setIsEditingProfile(true);
+                        playSound(SOUNDS.CLICK);
+                      }}
+                      className="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-600 rounded-xl font-bold hover:bg-indigo-100 transition-colors"
+                    >
+                      <Edit2 size={18} />
+                      Edit Profile
+                    </button>
+                  ) : (
+                    <button 
+                      onClick={() => setIsEditingProfile(false)}
+                      className="px-4 py-2 text-slate-500 font-bold hover:bg-slate-100 rounded-xl transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  )}
+                  <button 
+                    onClick={() => {
+                      setIsEditingProfile(false);
+                      setView(previousView);
+                    }}
+                    className="p-2 hover:bg-slate-100 rounded-full transition-colors"
+                  >
+                    <X size={24} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-col md:flex-row gap-8 mb-8">
+                <div className="flex flex-col items-center gap-4">
+                  <div className="relative group">
+                    {(isEditingProfile ? editAvatar : avatarUrl) ? (
+                      <img 
+                        src={isEditingProfile ? editAvatar : avatarUrl} 
+                        alt="Avatar" 
+                        className="w-32 h-32 rounded-full border-4 border-indigo-100 object-cover shadow-lg"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <div className="w-32 h-32 bg-indigo-50 rounded-full flex items-center justify-center text-indigo-300 border-4 border-indigo-100 shadow-lg">
+                        <UserIcon size={64} />
+                      </div>
+                    )}
+                  </div>
+                  {!isEditingProfile && (
+                    <div className="text-center">
+                      <h3 className="text-2xl font-black text-slate-800">{playerName}</h3>
+                      <p className="text-slate-400 text-sm font-medium">{user?.email}</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex-1 space-y-6">
+                  {isEditingProfile ? (
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1 ml-1">Display Name</label>
+                        <input 
+                          type="text"
+                          value={editName}
+                          onChange={(e) => setEditName(e.target.value)}
+                          className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold focus:border-indigo-500 outline-none transition-all"
+                          placeholder="Your Name"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1 ml-1">Avatar URL</label>
+                        <input 
+                          type="text"
+                          value={editAvatar}
+                          onChange={(e) => setEditAvatar(e.target.value)}
+                          className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 font-bold focus:border-indigo-500 outline-none transition-all"
+                          placeholder="https://example.com/avatar.png"
+                        />
+                        <p className="text-[10px] text-slate-400 mt-1 ml-1">Use a direct link to an image or choose from presets below</p>
+                      </div>
+                      
+                      <div className="pt-2">
+                        <label className="block text-xs font-bold text-slate-400 uppercase mb-2 ml-1">Presets</label>
+                        <div className="grid grid-cols-5 gap-2">
+                          {AVATARS.map((url, i) => (
+                            <button
+                              key={i}
+                              onClick={() => setEditAvatar(url)}
+                              className={cn(
+                                "aspect-square rounded-lg border-2 transition-all overflow-hidden",
+                                editAvatar === url ? "border-indigo-600 scale-105" : "border-slate-100 opacity-60"
+                              )}
+                            >
+                              <img src={url} alt={`Avatar ${i}`} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <button 
+                        onClick={handleUpdateProfile}
+                        className="w-full bg-indigo-600 text-white p-4 rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg flex items-center justify-center gap-2"
+                      >
+                        <Save size={20} />
+                        Save Changes
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-3 gap-4">
+                        <div className="bg-indigo-50 p-4 rounded-2xl text-center border border-indigo-100">
+                          <Trophy className="w-6 h-6 text-indigo-600 mx-auto mb-1" />
+                          <div className="text-xl font-black text-indigo-700">{userStats.wins}</div>
+                          <div className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Wins</div>
+                        </div>
+                        <div className="bg-amber-50 p-4 rounded-2xl text-center border border-amber-100">
+                          <Zap className="w-6 h-6 text-amber-600 mx-auto mb-1" />
+                          <div className="text-xl font-black text-amber-700">{userStats.totalPoints}</div>
+                          <div className="text-[10px] font-bold text-amber-400 uppercase tracking-widest">Points</div>
+                        </div>
+                        <div className="bg-emerald-50 p-4 rounded-2xl text-center border border-emerald-100">
+                          <Play className="w-6 h-6 text-emerald-600 mx-auto mb-1" />
+                          <div className="text-xl font-black text-emerald-700">{userStats.gamesPlayed}</div>
+                          <div className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">Games</div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center text-indigo-600">
+                              <Star size={20} />
+                            </div>
+                            <div>
+                              <div className="text-xs font-bold text-slate-400 uppercase">Current Level</div>
+                              <div className="font-black text-slate-700">Level {Math.floor(userStats.totalPoints / 1000) + 1}</div>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-xs font-bold text-slate-400 uppercase">Next Level</div>
+                            <div className="font-black text-indigo-600">{1000 - (userStats.totalPoints % 1000)} XP</div>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="pt-6 border-t border-slate-100">
+                <button 
+                  onClick={() => auth.signOut()}
+                  className="w-full bg-slate-100 text-slate-600 py-4 rounded-2xl font-bold hover:bg-rose-50 hover:text-rose-600 transition-all flex items-center justify-center gap-2"
+                >
+                  <LogIn size={20} className="rotate-180" />
+                  Sign Out
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+
         {view === 'shop' && (
           <motion.div 
             key="shop"
@@ -1186,6 +1515,151 @@ export default function App() {
           </motion.div>
         )}
 
+        {view === 'settings' && (
+          <motion.div 
+            key="settings"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="max-w-2xl mx-auto pt-20 px-4"
+          >
+            <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100">
+              <div className="flex items-center justify-between mb-8">
+                <h2 className="text-3xl font-black text-slate-900 italic uppercase">Settings</h2>
+                <button 
+                  onClick={() => {
+                    setShowInfo(false);
+                    setView(previousView);
+                  }}
+                  className="p-2 hover:bg-slate-100 rounded-full transition-colors"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+
+              <div className="space-y-6">
+                <div className="p-6 rounded-2xl border border-slate-100 bg-slate-50/50">
+                  <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Audio Settings</h3>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center text-indigo-600">
+                        <Music size={20} />
+                      </div>
+                      <div>
+                        <div className="font-bold text-slate-700">Background Music</div>
+                        <div className="text-xs text-slate-400">Toggle ambient game music</div>
+                      </div>
+                    </div>
+                    <button 
+                      onClick={() => {
+                        setIsBgmEnabled(!isBgmEnabled);
+                        playSound(SOUNDS.CLICK);
+                      }}
+                      className={cn(
+                        "w-12 h-6 rounded-full transition-all relative",
+                        isBgmEnabled ? "bg-indigo-600" : "bg-slate-300"
+                      )}
+                    >
+                      <div className={cn(
+                        "absolute top-1 w-4 h-4 bg-white rounded-full transition-all",
+                        isBgmEnabled ? "right-1" : "left-1"
+                      )} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-6 rounded-2xl border border-slate-100 bg-slate-50/50">
+                  <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Application</h3>
+                  <button 
+                    onClick={() => {
+                      setShowInfo(!showInfo);
+                      playSound(SOUNDS.CLICK);
+                    }}
+                    className="w-full flex items-center justify-between group"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center text-amber-600">
+                        <Info size={20} />
+                      </div>
+                      <div className="text-left">
+                        <div className="font-bold text-slate-700 group-hover:text-indigo-600 transition-colors">App Info</div>
+                        <div className="text-xs text-slate-400">Version, credits and how to play</div>
+                      </div>
+                    </div>
+                    <div className={cn("transition-transform duration-300", showInfo ? "rotate-180" : "")}>
+                      <Plus size={20} className="text-slate-300" />
+                    </div>
+                  </button>
+
+                  <a 
+                    href="https://profileddteam.carrd.co" 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="w-full flex items-center justify-between group mt-4 pt-4 border-t border-slate-200"
+                    onClick={() => playSound(SOUNDS.CLICK)}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-rose-100 rounded-xl flex items-center justify-center text-rose-600">
+                        <Heart size={20} fill="currentColor" />
+                      </div>
+                      <div className="text-left">
+                        <div className="font-bold text-slate-700 group-hover:text-rose-600 transition-colors">Support Us</div>
+                        <div className="text-xs text-slate-400">Visit our team profile</div>
+                      </div>
+                    </div>
+                    <ExternalLink size={20} className="text-slate-300 group-hover:text-rose-400 transition-colors" />
+                  </a>
+
+                  <AnimatePresence>
+                    {showInfo && (
+                      <motion.div 
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        className="overflow-hidden"
+                      >
+                        <div className="pt-6 mt-6 border-t border-slate-200 space-y-4">
+                          <div>
+                            <h4 className="text-xs font-black text-slate-900 uppercase mb-2">About Zoodle</h4>
+                            <p className="text-sm text-slate-500 leading-relaxed">
+                              Zoodle is a real-time multiplayer drawing and guessing game. Express your creativity, guess words, and climb the leaderboard!
+                            </p>
+                          </div>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <h4 className="text-xs font-black text-slate-900 uppercase mb-1">Version</h4>
+                              <p className="text-sm text-slate-500">2.1.0-stable</p>
+                            </div>
+                            <div>
+                              <h4 className="text-xs font-black text-slate-900 uppercase mb-1">Engine</h4>
+                              <p className="text-sm text-slate-500">React + Firebase</p>
+                            </div>
+                          </div>
+                          <div>
+                            <h4 className="text-xs font-black text-slate-900 uppercase mb-2">How to Play</h4>
+                            <ul className="text-sm text-slate-500 space-y-1 list-disc pl-4">
+                              <li>Join or create a room with friends.</li>
+                              <li>When it's your turn, draw the assigned word.</li>
+                              <li>Others guess the word in the chat.</li>
+                              <li>Earn points for correct guesses and good drawings!</li>
+                            </ul>
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              </div>
+
+              <div className="mt-8 pt-8 border-t border-slate-100 text-center">
+                <p className="text-[10px] font-bold text-slate-300 uppercase tracking-[0.2em]">
+                  Made with ❤️ for the Zoodle Community
+                </p>
+              </div>
+            </div>
+          </motion.div>
+        )}
+
         {view === 'landing' && (
           <motion.div 
             key="landing"
@@ -1196,16 +1670,53 @@ export default function App() {
               <h1 className="text-6xl font-black text-slate-900 mb-4 italic tracking-tighter">ZOODLE</h1>
               <div className="flex items-center justify-center gap-6">
                 <div className="flex items-center gap-4 text-slate-500 font-medium">
-                  <span className="flex items-center gap-1"><Trophy size={16} className="text-amber-500" /> Compete</span>
-                  <span className="flex items-center gap-1"><Palette size={16} className="text-indigo-500" /> Draw</span>
-                  <span className="flex items-center gap-1"><Coins size={16} className="text-yellow-500" /> Earn</span>
+                  <button 
+                    onClick={() => {
+                      setPreviousView('landing');
+                      setView('profile');
+                      playSound(SOUNDS.CLICK);
+                    }}
+                    className="flex items-center gap-2 hover:text-indigo-600 transition-colors"
+                  >
+                    {avatarUrl ? (
+                      <img src={avatarUrl} className="w-8 h-8 rounded-full border border-slate-200" referrerPolicy="no-referrer" />
+                    ) : (
+                      <UserIcon size={20} />
+                    )}
+                    <span className="font-bold">{playerName}</span>
+                  </button>
                 </div>
                 <div className="h-8 w-px bg-slate-200" />
                 <div className="flex items-center gap-2">
                   <button 
                     onClick={() => {
+                      setIsBgmEnabled(!isBgmEnabled);
+                      playSound(SOUNDS.CLICK);
+                    }}
+                    className={cn(
+                      "p-2 rounded-full border transition-all",
+                      isBgmEnabled ? "bg-indigo-50 border-indigo-200 text-indigo-600" : "bg-white border-slate-200 text-slate-400"
+                    )}
+                    title={isBgmEnabled ? "Disable Background Music" : "Enable Background Music"}
+                  >
+                    <Music size={18} className={isBgmEnabled ? "animate-bounce" : ""} />
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setPreviousView('landing');
+                      setView('settings');
+                      playSound(SOUNDS.CLICK);
+                    }}
+                    className="p-2 rounded-full border border-slate-200 bg-white text-slate-400 hover:text-indigo-600 hover:border-indigo-200 transition-all shadow-sm"
+                    title="Settings"
+                  >
+                    <Settings size={18} />
+                  </button>
+                  <button 
+                    onClick={() => {
                       setPreviousView('landing');
                       setView('shop');
+                      playSound(SOUNDS.CLICK);
                     }}
                     className="bg-white px-4 py-2 rounded-full border border-slate-200 shadow-sm hover:bg-slate-50 transition-all flex items-center gap-2"
                   >
@@ -1454,7 +1965,7 @@ export default function App() {
                   <div className="inline-block bg-slate-50 px-6 py-2 rounded-full border border-slate-100">
                     <span className="text-xs font-bold text-slate-400 uppercase mr-2">Guess the word:</span>
                     <span className="text-xl font-black text-slate-800 tracking-widest">
-                      {currentRoom.currentWord.split('').map((c, i) => (c === ' ' ? ' ' : '_')).join(' ')}
+                      {currentRoom.currentWord.split('').map((c, i) => (c === ' ' ? ' ' : (revealedLetters[i] || '_'))).join(' ')}
                     </span>
                   </div>
                 )}
@@ -1648,10 +2159,13 @@ export default function App() {
             initial={{ opacity: 0, y: 50 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 50 }}
-            className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-slate-800 text-white px-6 py-3 rounded-full shadow-2xl font-bold text-sm z-50 flex items-center gap-2"
+            className={cn(
+              "fixed bottom-8 left-1/2 -translate-x-1/2 px-6 py-3 rounded-2xl shadow-2xl font-bold text-white z-50 flex items-center gap-2",
+              toast.type === 'success' ? "bg-emerald-500" : "bg-rose-500"
+            )}
           >
-            <div className="w-2 h-2 bg-indigo-400 rounded-full animate-pulse" />
-            {toast}
+            {toast.type === 'success' ? <CheckCircle size={20} /> : <AlertCircle size={20} />}
+            {toast.message}
           </motion.div>
         )}
       </AnimatePresence>

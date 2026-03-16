@@ -34,3 +34,14 @@ export const ROUND_TIME = 60; // Default fallback
 export const TOTAL_ROUNDS = 3;
 export const POINTS_PER_GUESS = 100;
 export const COINS_PER_GUESS = 100;
+
+export const AVATARS = [
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Felix",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Aneka",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Milo",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Luna",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Oscar",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Zoe",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Jasper",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Ruby"
+];

@@ -20,9 +20,18 @@ export const PlayerList: React.FC<PlayerListProps> = ({ players, currentDrawerId
         {players.sort((a, b) => b.score - a.score).map((player) => (
           <div key={player.id} className="p-3 flex items-center gap-3 hover:bg-slate-50 transition-colors">
             <div className="relative">
-              <div className="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600">
-                <User size={20} />
-              </div>
+              {player.avatarUrl ? (
+                <img 
+                  src={player.avatarUrl} 
+                  alt={player.name} 
+                  className="w-10 h-10 rounded-full border border-slate-200 object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600">
+                  <User size={20} />
+                </div>
+              )}
               {currentDrawerId === player.id && (
                 <div className="absolute -top-1 -right-1 bg-amber-400 text-white p-1 rounded-full shadow-sm animate-bounce">
                   <span className="text-[10px] font-bold">✏️</span>

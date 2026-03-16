@@ -9,7 +9,13 @@ service cloud.firestore {
     // Document ID: {userId}
     // Fields:
     //   - displayName: string (required)
+    //   - avatarUrl: string (optional)
     //   - totalCoins: number (required, >= 0)
+    //   - stats: map (required)
+    //     - wins: number
+    //     - totalPoints: number
+    //     - gamesPlayed: number
+    //   - inventory: map (optional)
     //   - lastActive: timestamp (required)
     //   - role: string (optional, enum: ['user', 'admin'])
     //
@@ -33,12 +39,14 @@ service cloud.firestore {
     // Document ID: {playerId}
     // Fields:
     //   - name: string (required)
+    //   - avatarUrl: string (optional)
     //   - score: number (required)
     //   - coins: number (required)
     //   - isReady: bool (required)
     //   - isHost: bool (required)
     //   - lastActive: string (required, ISO 8601)
     //   - isBot: bool (optional)
+    //   - hasGuessedCorrectly: bool (optional)
     //
     // Sub-collection: rooms/{roomId}/messages
     // Document ID: {messageId}
@@ -88,10 +96,16 @@ service cloud.firestore {
     }
 
     function isValidUser(data) {
-      return hasOnlyAllowedFields(['displayName', 'totalCoins', 'inventory', 'lastActive', 'role']) &&
+      return hasOnlyAllowedFields(['displayName', 'avatarUrl', 'totalCoins', 'stats', 'inventory', 'lastActive', 'role']) &&
              data.displayName is string && data.displayName.size() > 0 && data.displayName.size() < 50 &&
+             (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() < 500) || data.avatarUrl == null) &&
              data.totalCoins is number && data.totalCoins >= 0 &&
+             (data.stats is map && 
+              data.stats.wins is number && 
+              data.stats.totalPoints is number && 
+              data.stats.gamesPlayed is number) &&
              (!('inventory' in data) || data.inventory is map) &&
+             (data.lastActive is timestamp || data.lastActive == null) &&
              (!('role' in data) || data.role in ['user', 'admin']);
     }
 
@@ -110,15 +124,25 @@ service cloud.firestore {
     }
 
     function isValidPlayer(data) {
-      return hasOnlyAllowedFields(['name', 'score', 'coins', 'isReady', 'isHost', 'lastActive', 'isBot', 'hasGuessedCorrectly']) &&
+      return hasOnlyAllowedFields(['name', 'avatarUrl', 'score', 'coins', 'isReady', 'isHost', 'lastActive', 'isBot', 'hasGuessedCorrectly']) &&
              data.name is string && data.name.size() > 0 && data.name.size() < 50 &&
+             (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() < 500) || data.avatarUrl == null) &&
              data.score is number &&
              data.coins is number &&
              data.isReady is bool &&
              data.isHost is bool &&
-             (!('lastActive' in data) || data.lastActive is string) &&
+             (!('lastActive' in data) || (data.lastActive is string && data.lastActive.size() < 100)) &&
              (!('isBot' in data) || data.isBot is bool) &&
              (!('hasGuessedCorrectly' in data) || data.hasGuessedCorrectly is bool);
+    }
+
+    function isValidMessage(data) {
+      return hasOnlyAllowedFields(['senderId', 'senderName', 'text', 'type', 'createdAt']) &&
+             data.senderId is string && data.senderId.size() < 100 &&
+             data.senderName is string && data.senderName.size() > 0 && data.senderName.size() < 50 &&
+             data.text is string && data.text.size() > 0 && data.text.size() < 1000 &&
+             data.type in ['chat', 'system', 'guess'] &&
+             data.createdAt is timestamp;
     }
 
     // Test collection for connection check
@@ -148,7 +172,7 @@ service cloud.firestore {
       
       match /messages/{messageId} {
         allow read: if isPlayerInRoom(roomId);
-        allow create: if isPlayerInRoom(roomId) && (
+        allow create: if isPlayerInRoom(roomId) && isValidMessage(request.resource.data) && (
           request.resource.data.senderId == request.auth.uid || 
           request.resource.data.senderId == 'system' ||
           (isHost(roomId) && get(/databases/$(database)/documents/rooms/$(roomId)/players/$(request.resource.data.senderId)).data.isBot == true)

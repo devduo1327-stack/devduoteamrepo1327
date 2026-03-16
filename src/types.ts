@@ -1,6 +1,7 @@
 export interface Player {
   id: string;
   name: string;
+  avatarUrl?: string;
   score: number;
   coins: number;
   isReady: boolean;
@@ -44,7 +45,13 @@ export interface DrawingLine {
 export interface UserProfile {
   uid: string;
   displayName: string;
+  avatarUrl?: string;
   totalCoins: number;
+  stats: {
+    wins: number;
+    totalPoints: number;
+    gamesPlayed: number;
+  };
   inventory: {
     freeze: number;
     hint: number;

@@ -6,7 +6,16 @@
       "type": "object",
       "properties": {
         "displayName": { "type": "string" },
+        "avatarUrl": { "type": "string" },
         "totalCoins": { "type": "integer" },
+        "stats": {
+          "type": "object",
+          "properties": {
+            "wins": { "type": "integer" },
+            "totalPoints": { "type": "integer" },
+            "gamesPlayed": { "type": "integer" }
+          }
+        },
         "inventory": {
           "type": "object",
           "properties": {
@@ -19,7 +28,7 @@
         "lastActive": { "type": "string", "format": "date-time" },
         "role": { "type": "string", "enum": ["user", "admin"] }
       },
-      "required": ["displayName", "totalCoins", "lastActive"]
+      "required": ["displayName", "totalCoins", "lastActive", "stats"]
     },
     "Room": {
       "title": "Room",
