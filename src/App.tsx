@@ -508,7 +508,7 @@ export default function App() {
         const wordWidth = word.length * 120 * 1.2;
         const startX = Math.max(50, (1000 - wordWidth) / 2);
         const startY = 400;
-        const allLines = getWordPoints(word, startX, startY, 120);
+        const allLines = getWordPoints(word, startX, startY, 1000, 800);
         
         if (botDrawingStepRef.current < allLines.length) {
           const linePoints = allLines[botDrawingStepRef.current];
@@ -586,6 +586,15 @@ export default function App() {
 
   const handleRoundEnd = async () => {
     if (!currentRoom) return;
+
+    // Reveal the word to everyone
+    await addDoc(collection(db, 'rooms', currentRoom.id, 'messages'), {
+      senderId: 'system',
+      senderName: 'System',
+      text: `The word was: ${currentRoom.currentWord}`,
+      type: 'system',
+      createdAt: serverTimestamp()
+    });
     
     const config = MODE_CONFIG[currentRoom.mode];
     const nextRound = currentRoom.currentRound + 1;
@@ -1603,7 +1612,7 @@ export default function App() {
                         <Heart size={20} fill="currentColor" />
                       </div>
                       <div className="text-left">
-                        <div className="font-bold text-slate-700 group-hover:text-rose-600 transition-colors">Support Us</div>
+                        <div className="font-bold text-slate-700 group-hover:text-rose-600 transition-colors">About Us</div>
                         <div className="text-xs text-slate-400">Visit our team profile</div>
                       </div>
                     </div>
