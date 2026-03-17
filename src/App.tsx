@@ -145,20 +145,16 @@ const ADJECTIVES = ["Neon", "Cyber", "Digital", "Quantum", "Hyper", "Virtual", "
 const NOUNS = ["Nexus", "Void", "Grid", "Matrix", "Circuit", "Node", "Core", "Link"];
 
 const SOUNDS = {
-  TECH: "https://www.soundjay.com/buttons/sounds/button-16.mp3",
-  WINNER: "https://www.soundjay.com/human/sounds/cheering-01.mp3",
-  CLICK: "https://www.soundjay.com/buttons/sounds/button-3.mp3",
-  CORRECT: "https://www.soundjay.com/buttons/sounds/button-09.mp3",
-  POWERUP: "https://www.soundjay.com/buttons/sounds/button-11.mp3",
-  ROUND_START: "https://www.soundjay.com/misc/sounds/bell-ringing-05.mp3",
-  BGM: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
+  TECH: "https://cdn.pixabay.com/audio/2022/03/15/audio_77f95325e5.mp3",
+  WINNER: "https://cdn.pixabay.com/audio/2021/08/04/audio_12b0c7443c.mp3",
+  CLICK: "https://cdn.pixabay.com/audio/2022/03/10/audio_f9c1692e8a.mp3",
+  CORRECT: "https://cdn.pixabay.com/audio/2021/08/04/audio_0625c1539c.mp3",
+  POWERUP: "https://cdn.pixabay.com/audio/2022/03/10/audio_c8c8a7395a.mp3",
+  ROUND_START: "https://cdn.pixabay.com/audio/2021/08/04/audio_c40ce71585.mp3",
+  BGM: "https://cdn.pixabay.com/audio/2022/01/18/audio_d0a13f69d2.mp3"
 };
 
 const audioCache: Record<string, HTMLAudioElement> = {};
-
-const bgmAudio = new Audio(SOUNDS.BGM);
-bgmAudio.loop = true;
-bgmAudio.preload = 'auto';
 
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
@@ -188,10 +184,36 @@ export default function App() {
   const [userInventory, setUserInventory] = useState({ freeze: 0, hint: 0, reveal: 0, skip: 0 });
   const [userStats, setUserStats] = useState({ wins: 0, totalPoints: 0, gamesPlayed: 0 });
   const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined);
-  const [isBgmEnabled, setIsBgmEnabled] = useState(false);
+  const [isBgmEnabled, setIsBgmEnabled] = useState(true);
   const [bgmVolume, setBgmVolume] = useState(0.3);
   const [sfxVolume, setSfxVolume] = useState(0.5);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const bgmRef = useRef<HTMLAudioElement | null>(null);
+
+  // Preload sounds
+  useEffect(() => {
+    Object.values(SOUNDS).forEach(url => {
+      if (!audioCache[url]) {
+        const audio = new Audio(url);
+        audio.preload = 'auto';
+        audioCache[url] = audio;
+      }
+    });
+
+    // Initialize BGM
+    if (!bgmRef.current) {
+      const audio = new Audio(SOUNDS.BGM);
+      audio.loop = true;
+      audio.preload = 'auto';
+      bgmRef.current = audio;
+    }
+
+    return () => {
+      if (bgmRef.current) {
+        bgmRef.current.pause();
+      }
+    };
+  }, []);
 
   const playSound = (url: string) => {
     try {
@@ -227,6 +249,7 @@ export default function App() {
   const [loadingText, setLoadingText] = useState('Loading assets...');
   const [isAppReady, setIsAppReady] = useState(false);
   const [hasUpdatedStats, setHasUpdatedStats] = useState(false);
+  const [showBgmOnResults, setShowBgmOnResults] = useState(false);
 
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
     setToast({ message: msg, type });
@@ -234,17 +257,20 @@ export default function App() {
   };
 
   const toggleBgm = () => {
-    const nextState = !isBgmEnabled;
-    setIsBgmEnabled(nextState);
-    
-    if (nextState) {
-      bgmAudio.play().catch(e => {
-        console.warn("BGM play failed:", e);
-      });
-    } else {
-      bgmAudio.pause();
-    }
+    const newState = !isBgmEnabled;
+    setIsBgmEnabled(newState);
     playSound(SOUNDS.CLICK);
+    
+    if (bgmRef.current) {
+      if (newState) {
+        const shouldPlay = view === 'landing' || (view === 'results' && showBgmOnResults);
+        if (shouldPlay) {
+          bgmRef.current.play().catch(e => console.warn("BGM toggle play failed:", e));
+        }
+      } else {
+        bgmRef.current.pause();
+      }
+    }
   };
 
   // Loading simulation
@@ -262,8 +288,8 @@ export default function App() {
 
     let currentProgress = 0;
     const interval = setInterval(() => {
-      // High speed loading simulation
-      const increment = currentProgress < 50 ? Math.random() * 10 + 5 : Math.random() * 25 + 10;
+      // High speed loading simulation - even faster now
+      const increment = currentProgress < 50 ? Math.random() * 15 + 10 : Math.random() * 35 + 20;
       currentProgress = Math.min(100, currentProgress + increment);
       
       setLoadingProgress(currentProgress);
@@ -278,30 +304,67 @@ export default function App() {
         clearInterval(interval);
         setTimeout(() => {
           setIsAppReady(true);
+          setLoading(false); // Ensure loading is set to false when simulation ends
         }, 100);
       }
-    }, 40);
+    }, 25);
 
     return () => clearInterval(interval);
   }, [loading]);
 
   // BGM Control
   useEffect(() => {
-    bgmAudio.volume = bgmVolume;
+    if (!bgmRef.current) return;
+    bgmRef.current.volume = bgmVolume;
     
-    if (isBgmEnabled) {
-      bgmAudio.play().catch(() => {});
+    const shouldPlayBgm = isBgmEnabled && (view === 'landing' || (view === 'results' && showBgmOnResults));
+    
+    if (shouldPlayBgm) {
+      // Use a small timeout to ensure state has settled
+      const timer = setTimeout(() => {
+        bgmRef.current?.play().catch(() => {
+          // If it fails, it's likely due to autoplay policy
+          console.log("BGM autoplay blocked, waiting for interaction");
+        });
+      }, 100);
+      return () => clearTimeout(timer);
     } else {
-      bgmAudio.pause();
+      bgmRef.current.pause();
     }
-  }, [isBgmEnabled, bgmVolume]);
+  }, [isBgmEnabled, bgmVolume, view, showBgmOnResults]);
+
+  // Global interaction listener to unlock audio
+  useEffect(() => {
+    const unlockAudio = () => {
+      if (isBgmEnabled && bgmRef.current && bgmRef.current.paused) {
+        const shouldPlay = view === 'landing' || (view === 'results' && showBgmOnResults);
+        if (shouldPlay) {
+          bgmRef.current.play().catch(() => {});
+        }
+      }
+      // We only need to unlock once
+      window.removeEventListener('click', unlockAudio);
+      window.removeEventListener('keydown', unlockAudio);
+      window.removeEventListener('touchstart', unlockAudio);
+    };
+
+    window.addEventListener('click', unlockAudio);
+    window.addEventListener('keydown', unlockAudio);
+    window.addEventListener('touchstart', unlockAudio);
+
+    return () => {
+      window.removeEventListener('click', unlockAudio);
+      window.removeEventListener('keydown', unlockAudio);
+      window.removeEventListener('touchstart', unlockAudio);
+    };
+  }, [isBgmEnabled, view, showBgmOnResults]);
 
   // Auth listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setIsAuthReady(true);
-      setLoading(false);
+      // We don't set loading false here anymore, the simulation handles it
     });
     return unsubscribe;
   }, []);
@@ -473,6 +536,23 @@ export default function App() {
     if (view === 'results') {
       confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
       playSound(SOUNDS.WINNER);
+      
+      const timer = setTimeout(() => {
+        if (audioCache[SOUNDS.WINNER]) {
+          audioCache[SOUNDS.WINNER].pause();
+          audioCache[SOUNDS.WINNER].currentTime = 0;
+        }
+        setShowBgmOnResults(true);
+      }, 5000);
+      
+      return () => {
+        clearTimeout(timer);
+        setShowBgmOnResults(false);
+        if (audioCache[SOUNDS.WINNER]) {
+          audioCache[SOUNDS.WINNER].pause();
+          audioCache[SOUNDS.WINNER].currentTime = 0;
+        }
+      };
     }
   }, [view]);
 
